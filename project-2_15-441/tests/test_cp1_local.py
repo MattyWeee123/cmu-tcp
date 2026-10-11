@@ -289,6 +289,8 @@ class CheckpointOne(unittest.TestCase):
         result = decode(data)
         self.assertEqual(result["src"], source[1])
         self.assertEqual(result["dst"], self.port)
+        if result["data"]:
+            self.assertEqual(result["flags"], ACK)
         return result
 
     def quiet(self, duration=None):
@@ -334,33 +336,88 @@ class CheckpointOne(unittest.TestCase):
         return segments
 
     def test_initiator_retransmits_same_syn(self):
-        peer = Peer(self, "initiator", self.port)
+        peer = Peer(self, "initiator", self.port, outgoing=b"x")
         first = self.receive()
         started = time.monotonic()
         second = self.receive()
         self.assertEqual(first, second)
         self.assertGreaterEqual(time.monotonic() - started, RTO * 0.7)
         self.assertEqual(first["flags"], SYN)
+        self.send(peer, seq=100, ack=add(second["seq"], 1), flags=SYN | ACK)
+        final = self.receive()
+        self.assertEqual(
+            (final["flags"], final["seq"], final["ack"], final["data"]),
+            (ACK, add(first["seq"], 1), 101, b""),
+        )
+        data = self.receive()
+        self.assertEqual(
+            (data["seq"], data["ack"], data["data"]),
+            (final["seq"], 101, b"x"),
+        )
+        self.send(peer, seq=101, ack=add(data["seq"], 1), flags=ACK)
+        peer.finish()
 
-    def test_ack_probe_does_not_match_queued_application_data(self):
+    def test_data_retransmission_piggybacks_latest_ack(self):
         peer = Peer(
-            self, "initiator", self.port, outgoing=b"queued", receive_length=1
+            self, "initiator", self.port, outgoing=b"x", receive_length=2
         )
         seq, ack = self.initiator_handshake(peer, seq=302)
-        # Reproduce a peer that distinguishes ACK packets by their flag, as the
-        # starter backend does, while the application already has data queued.
-        time.sleep(min(0.01, RTO / 10))
-        self.send(peer, seq=seq, ack=ack, data=b"x")
-        response = self.receive()
-        while response["flags"] != ACK:
-            self.assertEqual(response["flags"], 0)
-            self.assertEqual(response["data"], b"queued")
-            self.send(peer, seq=add(seq, 1), ack=add(ack, 6), flags=ACK)
+        first = self.receive()
+        self.assertEqual((first["ack"], first["data"]), (303, b"x"))
+        # ACK marks a significant acknowledgment number, not an empty payload.
+        # Receive data in both formats while our outgoing byte remains unacked.
+        for offset, flags in enumerate((0, ACK)):
+            self.send(
+                peer, seq=add(seq, offset), ack=ack, flags=flags, data=b"y"
+            )
             response = self.receive()
-        self.assertEqual(response["ack"], 304)
-        self.assertEqual(response["data"], b"")
+            self.assertEqual(
+                (response["flags"], response["ack"], response["data"]),
+                (ACK, add(seq, offset + 1), b""),
+            )
+        retransmitted = self.receive()
+        self.assertEqual(
+            (
+                retransmitted["seq"],
+                retransmitted["ack"],
+                retransmitted["data"],
+            ),
+            (ack, 305, b"x"),
+        )
+        self.send(peer, seq=305, ack=add(ack, 1), flags=ACK)
         self.assertEqual(peer.line(), "TRANSFER_DONE")
         peer.finish()
+        self.assertEqual(peer.output.read_bytes(), b"yy")
+
+    def test_initiator_receives_data_with_relay_header_ports(self):
+        lengths = (1, min(1000, MSS), MSS)
+        peer = Peer(
+            self, "initiator", self.port, receive_length=2 * sum(lengths)
+        )
+        seq, ack = self.initiator_handshake(peer, seq=302)
+        expected = bytearray()
+        for flags in (0, ACK):
+            for length in lengths:
+                payload = b"z" * length
+                self.send(
+                    peer,
+                    src=(self.port + 1) % 65536,
+                    dst=(peer.port + 1) % 65536,
+                    seq=seq,
+                    ack=ack,
+                    flags=flags,
+                    data=payload,
+                )
+                seq = add(seq, length)
+                response = self.receive()
+                self.assertEqual(
+                    (response["flags"], response["ack"], response["data"]),
+                    (ACK, seq, b""),
+                )
+                expected.extend(payload)
+        self.assertEqual(peer.line(), "TRANSFER_DONE")
+        peer.finish()
+        self.assertEqual(peer.output.read_bytes(), bytes(expected))
 
     def test_handshake_and_data_through_payload_preserving_udp_relay(self):
         peer = Peer(self, receive_length=1)

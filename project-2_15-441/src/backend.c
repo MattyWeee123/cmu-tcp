@@ -116,10 +116,10 @@ static int send_final_ack(backend_t* backend) {
 }
 
 static int send_segment(backend_t* backend, segment_t* segment) {
-  /* Keep data distinct from pure ACK packets for starter-code peers. Receive
-   * processing still accepts data with the ACK flag as well as without it. */
+  /* Data also acknowledges the receive stream. Rebuild that ACK on each
+   * retransmission because incoming data may have advanced it. */
   return send_packet(backend, segment->seq,
-                     backend->sock->window.next_seq_expected, 0,
+                     backend->sock->window.next_seq_expected, ACK_FLAG_MASK,
                      segment->payload, segment->length);
 }
 
