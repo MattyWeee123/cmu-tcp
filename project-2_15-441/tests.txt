@@ -1,1 +1,71 @@
-Describe your tests here
+Checkpoint 1 testing
+====================
+
+Run the portable suite from project-2_15-441 with:
+    make test-local
+
+It uses Python 3.9+ unittest, struct, sockets, subprocesses, and a C11 compiler.
+No third-party Python packages or privileged/raw sockets are required. The
+cp1_peer.c application links the actual transport implementation and exercises
+cmu_socket, cmu_write, cmu_read, and cmu_close through their public API.
+
+An independent Python UDP endpoint checks exact CMU-TCP header values and data.
+It deliberately withholds packets/ACKs instead of relying on successful
+communication between two copies of the implementation as the only oracle.
+
+Coverage
+--------
+- Initiator SYN and listener SYN-ACK, including retransmission with the same ISN.
+- Random sequence initialization on both endpoints across repeated sockets.
+- Rejection of malformed packet sizes, header lengths, identifiers, ports,
+  flags, SYN-ACK acknowledgment numbers, and final handshake ACKs.
+- Duplicate SYN and SYN-ACK recovery, including loss of the final handshake ACK.
+- An ACK carrying data can complete the listener handshake.
+- No application data is transmitted before the handshake completes.
+- The initiator recovers when the listener starts after the first SYN.
+- Traffic from another UDP endpoint cannot change the established peer.
+- In-order receive delivery and cumulative ACKs, with duplicate suppression
+  and rejection of out-of-order data. Data with and without the ACK flag works.
+- Receive and send sequence wraparound, including SYN at UINT32_MAX.
+- A full byte window is sent without waiting for ACKs; no extra bytes are sent
+  until space is released. Partial cumulative ACKs release exactly that space.
+- Old, duplicate, and future ACKs cannot release unsent/unacknowledged bytes.
+- A timeout retransmits the entire outstanding window in sequence order.
+- A partial ACK leaves only the unacknowledged suffix eligible for retransmission.
+- Duplicate ACK traffic cannot keep postponing the retransmission timer.
+- A closing receiver still acknowledges a retransmitted final data segment.
+- Bidirectional transfer is compared byte for byte under lossless conditions
+  and a seeded relay with 7% loss, 4% duplication, and 6% delayed data packets.
+- Zero-length API operations, invalid lengths, and repeated close are checked
+  by the test application.
+
+Test configuration
+------------------
+The default test build changes only a temporary copy of grading.h to use a
+200 ms timeout. It does not edit the project's grading.h. Overrides are:
+    CP1_TEST_TIMEOUT         timeout in milliseconds
+    CP1_TEST_WINDOW          fixed window in bytes
+    CP1_TEST_MAX_LEN         maximum total packet length
+    CP1_TEST_TRANSFER_BYTES  minimum bytes per direction for transfer tests
+    CP1_TEST_SANITIZE=1      AddressSanitizer and UndefinedBehaviorSanitizer
+
+cp1_test_random.c is linked only into the test executable. Its read wrapper
+allows individual tests to force the random ISN near UINT32_MAX; normal reads
+and the production random-sequence implementation are preserved. The normal
+server, client, and testing_server binaries do not link this wrapper.
+
+Validation performed locally on macOS
+-------------------------------------
+- make clean all: clean build, no compiler warnings.
+- Portable regression suite with address and undefined-behavior sanitizers.
+- Full suite with MAX_LEN=512 and CP1_WINDOW_SIZE=509, with sanitizers.
+- Four window/retransmission/wraparound tests with CP1_WINDOW_SIZE=1.
+- Four SYN, SYN-ACK, data-timeout, and duplicate-ACK timing tests with the
+  assignment's DEFAULT_TIMEOUT=3000.
+- Bidirectional transfers of at least 1 MiB per endpoint, both lossless and
+  with the seeded impairment relay, with sanitizers.
+- Clang static analysis of backend.c and cmu_tcp.c.
+
+The supplied Scapy/Fabric tests require the Vagrant client/server environment;
+that environment was not available locally. Gradescope tests were not run.
+The optional FIN teardown bonus is outside this implementation's scope.

@@ -103,6 +103,39 @@ slow-start threshold (`ssthresh`), and congestion-control stage whenever they ch
 Plot `cwnd` over time from these logs and label slow start, congestion avoidance,
 fast recovery, triple-duplicate-ACK events, and timeouts.
 
+## Portable checkpoint 1 tests
+
+The required CP1 mechanisms are implemented in `backend.c`: connection setup,
+random initial sequence numbers, a byte-based fixed window, cumulative ACKs,
+and Go-Back-N timeout recovery. The backend polls the UDP socket and an
+application wakeup pipe, so receiving and retransmission continue independently
+of application reads and writes. The public socket API and packet format are
+unchanged. The optional FIN teardown and CP2 congestion/flow control are not
+implemented. Closing drains queued and outstanding data, then briefly keeps a
+receiver available to re-acknowledge retransmitted final data.
+
+A portable suite runs with Python 3.9+ and a C11 compiler, without root access,
+Scapy, Docker, or Vagrant:
+
+```bash
+cd project-2_15-441
+make
+make test-local
+```
+
+These tests compile a temporary copy with a 200 ms retransmission timeout to
+keep the suite fast. The submitted `grading.h` retains the assignment's 3000 ms
+timeout. For additional configurations:
+
+```bash
+CP1_TEST_SANITIZE=1 make test-local
+CP1_TEST_WINDOW=509 CP1_TEST_MAX_LEN=512 make test-local
+CP1_TEST_TIMEOUT=3000 python3 tests/test_cp1_local.py CheckpointOne.test_initiator_retransmits_same_syn
+```
+
+`tests.txt` describes coverage and validation. The original container-based
+tests below remain available.
+
 ## Automatic tests
 
 You should also run automatic tests. On either the client or server container, navigate to `/vagrant/project-2_15-441/` and run:
