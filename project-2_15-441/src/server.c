@@ -50,7 +50,7 @@ void functionality(cmu_socket_t *sock) {
   fclose(fp);
 }
 
-int main() {
+int main(void) {
   int portno;
   char *serverip;
   char *serverport;

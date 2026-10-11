@@ -51,7 +51,7 @@ void functionality(cmu_socket_t *sock) {
  * Purpose: To provide a sample listener for the TCP connection.
  *
  */
-int main() {
+int main(void) {
   int portno;
   char *serverip;
   char *serverport;

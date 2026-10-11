@@ -11,3 +11,6 @@ project-2_15-441/tests/testing_server
 **/*.pcap
 !**/test.pcap
 cp2-experiment
+*.dSYM/
+.DS_Store
+**/handin.zip
