@@ -44,6 +44,19 @@ Coverage
 - A partial ACK leaves only the unacknowledged suffix eligible for retransmission.
 - Duplicate ACK traffic cannot keep postponing the retransmission timer.
 - A closing receiver still acknowledges a retransmitted final data segment.
+- Close drains all queued and unacknowledged data before sending FIN.
+- Close during SYN_SENT or SYN_RECEIVED completes the handshake before FIN,
+  including an initiator that closes without ever writing application data.
+- FIN consumes one sequence number and is retransmitted with the same sequence
+  number on timeout. Invalid ACKs cannot acknowledge it or delay its timer.
+- After its FIN is acknowledged, an endpoint still receives and acknowledges
+  data until the peer sends its own FIN.
+- Combined FIN-ACK packets work with and without payload. FIN is consumed only
+  in order, after its payload; duplicate FINs never advance the stream again.
+- TIME_WAIT acknowledges a repeated peer FIN when the final ACK was lost.
+- Peer FIN wakes blocked reads, returns buffered data before EOF, and still
+  permits application writes in the other direction.
+- Passive and simultaneous close work, including FIN at UINT32_MAX.
 - Bidirectional transfer is compared byte for byte under lossless conditions
   and a seeded relay with 7% loss, 4% duplication, and 6% delayed data packets.
 - Zero-length API operations, invalid lengths, and repeated close are checked
@@ -72,14 +85,18 @@ Validation performed locally on macOS
 - Four window/retransmission/wraparound tests with CP1_WINDOW_SIZE=1.
 - Four SYN, SYN-ACK, data-timeout, and duplicate-ACK timing tests with the
   assignment's DEFAULT_TIMEOUT=3000.
+- FIN retransmission, receive-after-close, passive close, and simultaneous close
+  tests with DEFAULT_TIMEOUT=3000 and sanitizers.
 - Bidirectional transfers of at least 1 MiB per endpoint, both lossless and
   with the seeded impairment relay, with sanitizers.
 - Clang static analysis of backend.c and cmu_tcp.c.
 
 The supplied Scapy/Fabric tests require the Vagrant client/server environment;
-that environment was not available locally. The current suite contains 24 tests.
+that environment was not available locally. The current suite contains 31 tests.
 Gradescope exposed that clearing ACK on outgoing data breaks the retransmission
 and windowing tests. The local packet assertions now enforce that requirement
 and reproduce the flags=0 versus ACK=4 failure before the fix. Header-preserving
 relay tests separately cover the receive-side port validation issue.
-The optional FIN teardown bonus is outside this implementation's scope.
+Gradescope submission 436193477 passed all required CP1 tests (120.2 points)
+before FIN teardown was added. The added teardown behavior is verified locally;
+its Gradescope bonus result has not yet been checked.

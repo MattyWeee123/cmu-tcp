@@ -66,6 +66,7 @@ typedef struct {
   cmu_buffer_t send_buffer;
   int wake_pipe[2];
   int dying;
+  int read_eof;
   int backend_done;
   int error;
   uint32_t initial_seq;
@@ -104,6 +105,7 @@ int cmu_socket(cmu_socket_t* sock, const cmu_socket_type_t socket_type,
 
 /**
  * Closes a CMU-TCP socket.
+ * Drains pending writes and waits for both directions of the FIN exchange.
  *
  * @param sock The socket to close.
  *
@@ -124,7 +126,8 @@ int cmu_close(cmu_socket_t* sock);
  *             `cmu_read_mode_t` for more information. `TIMEOUT` is not
  *             implemented for CMU-TCP.
  *
- * @return The number of bytes read on success, -1 on error.
+ * @return The number of bytes read on success, -1 on error. Returns 0 after
+ *         peer EOF once buffered data is drained, or when NO_WAIT has no data.
  */
 int cmu_read(cmu_socket_t* sock, void* buf, const int length,
              cmu_read_mode_t flags);

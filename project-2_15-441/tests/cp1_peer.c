@@ -39,16 +39,21 @@ int main(int argc, char** argv) {
   }
   FILE* output = fopen(argv[4], "wb");
   if (output == NULL) return 7;
+  int read_to_eof = strcmp(argv[5], "eof") == 0;
   size_t remaining = (size_t)strtoull(argv[5], NULL, 10);
-  while (remaining > 0) {
-    int wanted =
-        remaining > sizeof(buffer) ? (int)sizeof(buffer) : (int)remaining;
+  while (read_to_eof || remaining > 0) {
+    int wanted = read_to_eof || remaining > sizeof(buffer) ? (int)sizeof(buffer)
+                                                           : (int)remaining;
     int count = cmu_read(&sock, buffer, wanted, NO_FLAG);
+    if (read_to_eof && count == 0) break;
     if (count <= 0) return 8;
     if (fwrite(buffer, 1, (size_t)count, output) != (size_t)count) return 9;
-    remaining -= (size_t)count;
+    if (!read_to_eof) remaining -= (size_t)count;
   }
   fclose(output);
+  /* A peer FIN ends reads without preventing a response in the other direction.
+   */
+  if (read_to_eof && cmu_write(&sock, "reply", 5) < 0) return 13;
   puts("TRANSFER_DONE");
   fflush(stdout);
   if (strcmp(argv[6], "hold") == 0 && getchar() == EOF) return 10;

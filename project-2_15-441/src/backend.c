@@ -35,6 +35,16 @@ _Static_assert(DEFAULT_TIMEOUT > 0,
                "The retransmission timeout must be positive");
 
 typedef enum { LISTEN, SYN_SENT, SYN_RECEIVED, ESTABLISHED } connection_state_t;
+typedef enum {
+  OPEN,
+  FIN_WAIT_1,
+  FIN_WAIT_2,
+  CLOSE_WAIT,
+  CLOSING,
+  LAST_ACK,
+  TIME_WAIT,
+  CLOSED
+} close_state_t;
 
 typedef struct segment {
   struct segment* next;
@@ -53,8 +63,10 @@ typedef struct {
   segment_t* tail;
   int64_t handshake_deadline;
   int64_t data_deadline;
-  int64_t last_data_received;
-  int received_data;
+  close_state_t close_state;
+  uint32_t fin_seq;
+  int64_t fin_deadline;
+  int64_t linger_deadline;
 } backend_t;
 
 static int64_t now_ms(void) {
@@ -123,6 +135,18 @@ static int send_segment(backend_t* backend, segment_t* segment) {
                      segment->payload, segment->length);
 }
 
+static int send_fin(backend_t* backend) {
+  return send_packet(backend, backend->fin_seq,
+                     backend->sock->window.next_seq_expected,
+                     FIN_FLAG_MASK | ACK_FLAG_MASK, NULL, 0);
+}
+
+static void enter_time_wait(backend_t* backend) {
+  backend->close_state = TIME_WAIT;
+  /* Retain the endpoint long enough to ACK a retransmitted peer FIN. */
+  backend->linger_deadline = now_ms() + 2LL * DEFAULT_TIMEOUT;
+}
+
 static void establish(backend_t* backend) {
   backend->state = ESTABLISHED;
   backend->sock->window.last_ack_received = backend->sock->initial_seq + 1;
@@ -137,6 +161,14 @@ static void acknowledge(backend_t* backend, uint32_t ack) {
     return;
 
   window->last_ack_received = ack;
+  if (ack == backend->fin_seq + 1) {
+    if (backend->close_state == FIN_WAIT_1)
+      backend->close_state = FIN_WAIT_2;
+    else if (backend->close_state == CLOSING)
+      enter_time_wait(backend);
+    else if (backend->close_state == LAST_ACK)
+      backend->close_state = CLOSED;
+  }
   while (backend->head != NULL) {
     segment_t* segment = backend->head;
     if (before(ack, segment->seq + segment->length)) {
@@ -273,24 +305,39 @@ static int handle_packet(backend_t* backend, uint8_t* packet, ssize_t length,
       return send_handshake(backend);
     return EXIT_SUCCESS;
   }
-  /* FIN teardown is the optional extension, not part of CP1 data transfer. */
-  if (flags != 0 && flags != ACK_FLAG_MASK) return EXIT_SUCCESS;
   if (flags & ACK_FLAG_MASK) acknowledge(backend, ack);
-  if (payload_length == 0) return EXIT_SUCCESS;
+  int fin = (flags & FIN_FLAG_MASK) != 0;
+  if (payload_length == 0 && !fin) return EXIT_SUCCESS;
 
-  backend->received_data = 1;
-  backend->last_data_received = now_ms();
-  if (seq == sock->window.next_seq_expected) {
+  int receive_open = backend->close_state == OPEN ||
+                     backend->close_state == FIN_WAIT_1 ||
+                     backend->close_state == FIN_WAIT_2;
+  if (receive_open && seq == sock->window.next_seq_expected) {
     pthread_mutex_lock(&sock->lock);
     int result = buffer_append(&sock->receive_buffer, get_payload(packet),
                                payload_length);
     if (result == EXIT_SUCCESS) {
       sock->window.next_seq_expected += payload_length;
+      if (fin) {
+        /* FIN follows any payload and consumes one byte of sequence space.
+         * EOF closes only the receive stream; application writes still work. */
+        ++sock->window.next_seq_expected;
+        sock->read_eof = 1;
+        if (backend->close_state == OPEN)
+          backend->close_state = CLOSE_WAIT;
+        else if (backend->close_state == FIN_WAIT_1)
+          backend->close_state = CLOSING;
+        else
+          enter_time_wait(backend);
+      }
       pthread_cond_broadcast(&sock->wait_cond);
     }
     pthread_mutex_unlock(&sock->lock);
     if (result < 0) return EXIT_ERROR;
   }
+  if (fin && backend->close_state == TIME_WAIT &&
+      seq + payload_length + 1 == sock->window.next_seq_expected)
+    enter_time_wait(backend);
   /* Go-Back-N discards out-of-order and duplicate payloads, acknowledging only
    * the contiguous prefix. Even duplicates need ACKs to recover a lost ACK. */
   return send_ack(backend);
@@ -338,14 +385,13 @@ void* begin_backend(void* in) {
     int drained = sock->dying && sock->send_buffer.length == 0;
     pthread_mutex_unlock(&sock->lock);
     int timeout = -1;
-    if (drained && backend.head == NULL) {
-      /* There is no FIN exchange in the mandatory checkpoint. Briefly retain
-       * the receiver so a peer can recover if the final data ACK was lost. */
-      if (!backend.received_data ||
-          now >= backend.last_data_received + 2LL * DEFAULT_TIMEOUT)
-        break;
-      timeout =
-          wait_time(backend.last_data_received + 2LL * DEFAULT_TIMEOUT, now);
+    /* An idle listener has no connection to tear down. Once a handshake has
+     * started, finish it before sending FIN even if no data was queued. */
+    if (drained && backend.state == LISTEN) break;
+    if (backend.close_state == CLOSED) break;
+    if (backend.close_state == TIME_WAIT) {
+      if (now >= backend.linger_deadline) break;
+      timeout = wait_time(backend.linger_deadline, now);
     }
 
     if (backend.state == SYN_SENT || backend.state == SYN_RECEIVED) {
@@ -377,6 +423,25 @@ void* begin_backend(void* in) {
       }
       if (backend.head != NULL)
         timeout = wait_time(backend.data_deadline, now_ms());
+
+      if (drained && backend.head == NULL &&
+          (backend.close_state == OPEN || backend.close_state == CLOSE_WAIT)) {
+        backend.fin_seq = sock->window.next_seq_to_send++;
+        backend.close_state =
+            backend.close_state == OPEN ? FIN_WAIT_1 : LAST_ACK;
+        backend.fin_deadline = now_ms();
+      }
+      if (backend.close_state == FIN_WAIT_1 || backend.close_state == CLOSING ||
+          backend.close_state == LAST_ACK) {
+        if (now_ms() >= backend.fin_deadline) {
+          if (send_fin(&backend) < 0) {
+            error = errno;
+            break;
+          }
+          backend.fin_deadline = now_ms() + DEFAULT_TIMEOUT;
+        }
+        timeout = wait_time(backend.fin_deadline, now_ms());
+      }
     }
 
     struct pollfd fds[2] = {{sock->socket, POLLIN, 0},

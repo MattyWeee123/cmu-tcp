@@ -110,9 +110,12 @@ random initial sequence numbers, a byte-based fixed window, cumulative ACKs,
 and Go-Back-N timeout recovery. The backend polls the UDP socket and an
 application wakeup pipe, so receiving and retransmission continue independently
 of application reads and writes. The public socket API and packet format are
-unchanged. The optional FIN teardown and CP2 congestion/flow control are not
-implemented. Closing drains queued and outstanding data, then briefly keeps a
-receiver available to re-acknowledge retransmitted final data.
+unchanged. FIN teardown supports independent close in each direction, timeout
+retransmission, and simultaneous close. Closing drains queued and outstanding
+data before sending FIN, then keeps receiving until the peer sends FIN. A peer
+FIN causes reads to return EOF after buffered data is drained; writes remain
+available until the application closes. TIME_WAIT retains the endpoint to
+acknowledge a retransmitted peer FIN. CP2 congestion/flow control is not implemented.
 
 A portable suite runs with Python 3.9+ and a C11 compiler, without root access,
 Scapy, Docker, or Vagrant:

@@ -205,7 +205,7 @@ int cmu_read(cmu_socket_t* sock, void* buf, int length, cmu_read_mode_t flags) {
   if (length == 0) return 0;
   pthread_mutex_lock(&sock->lock);
   while (flags == NO_FLAG && sock->receive_buffer.length == 0 &&
-         !sock->backend_done)
+         !sock->read_eof && !sock->backend_done)
     pthread_cond_wait(&sock->wait_cond, &sock->lock);
 
   size_t count = sock->receive_buffer.length;

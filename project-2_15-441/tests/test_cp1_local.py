@@ -23,7 +23,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = struct.Struct("!IHHIIHHBHH")
-SYN, ACK = 8, 4
+SYN, ACK, FIN = 8, 4, 2
 MASK = (1 << 32) - 1
 RTO = int(os.environ.get("CP1_TEST_TIMEOUT", "200")) / 1000
 MAX_LEN = int(os.environ.get("CP1_TEST_MAX_LEN", "1400"))
@@ -86,6 +86,7 @@ class Peer:
         hold=True,
         initial_sequence=None,
     ):
+        self.owner = owner
         self.directory = tempfile.TemporaryDirectory(prefix="cmu-peer-")
         owner.addCleanup(self.directory.cleanup)
         base = Path(self.directory.name)
@@ -133,10 +134,12 @@ class Peer:
         self.stderr.seek(0)
         return self.stderr.read()
 
-    def finish(self, timeout=None):
+    def request_close(self):
         if self.process.poll() is None:
             self.process.stdin.write(b"\n")
             self.process.stdin.flush()
+
+    def wait_closed(self, timeout=None):
         self.process.wait(timeout=timeout or max(5, 5 * RTO))
         if self.process.returncode != 0:
             raise AssertionError(
@@ -147,6 +150,25 @@ class Peer:
             or "ERROR: AddressSanitizer" in self.errors()
         ):
             raise AssertionError(self.errors())
+
+    def finish(self, timeout=None):
+        self.request_close()
+        # Complete the scripted peer's side of an otherwise verified transfer.
+        # Never acknowledge data here: missing data ACKs must still fail tests.
+        deadline = time.monotonic() + (timeout or max(5, 5 * RTO))
+        while self.process.poll() is None and time.monotonic() < deadline:
+            if not select.select([self.owner.sock], [], [], 0.01)[0]:
+                continue
+            raw, source = self.owner.sock.recvfrom(65535)
+            response = decode(raw)
+            if source[1] == self.port and response["flags"] & FIN:
+                self.owner.send(
+                    self,
+                    seq=response["ack"],
+                    ack=add(response["seq"], 1),
+                    flags=FIN | ACK,
+                )
+        self.wait_closed(timeout=0.1)
 
     def cleanup(self):
         if self.process.poll() is None:
@@ -447,7 +469,22 @@ class CheckpointOne(unittest.TestCase):
         self.assertEqual((response["flags"], response["ack"]), (ACK, 102))
         self.assertEqual(peer.line(), "TRANSFER_DONE")
         self.assertEqual(peer.output.read_bytes(), b"x")
-        peer.finish()
+        peer.request_close()
+        fin = decode(self.sock.recvfrom(65535)[0])
+        self.assertEqual((fin["flags"], fin["ack"]), (FIN | ACK, 102))
+        self.sock.sendto(
+            packet(
+                self.port,
+                peer.port,
+                seq=102,
+                ack=add(fin["seq"], 1),
+                flags=FIN | ACK,
+            ),
+            target,
+        )
+        final = decode(self.sock.recvfrom(65535)[0])
+        self.assertEqual((final["flags"], final["ack"]), (ACK, 103))
+        peer.wait_closed()
 
     def test_listener_retransmits_same_syn_ack(self):
         peer = Peer(self)
@@ -592,7 +629,9 @@ class CheckpointOne(unittest.TestCase):
                     self.send(peer, seq=100, flags=SYN)
                 response = self.receive()
                 numbers.append(response["seq"])
-                peer.finish()
+                # This test never completes the handshake with the peer.
+                peer.process.terminate()
+                peer.process.wait(timeout=2)
             self.assertEqual(len(set(numbers)), len(numbers))
             self.assertNotIn(0, numbers)
 
@@ -656,11 +695,17 @@ class CheckpointOne(unittest.TestCase):
         seq, ack = self.listener_handshake(peer)
         self.send(peer, seq=seq, ack=ack, flags=ACK, data=b"end")
         self.assertEqual(self.receive()["ack"], add(seq, 3))
+        fin = self.receive()
+        self.assertTrue(fin["flags"] & FIN)
+        self.send(peer, seq=add(seq, 3), ack=add(fin["seq"], 1), flags=ACK)
         time.sleep(RTO * 1.1)
         self.send(peer, seq=seq, ack=ack, flags=ACK, data=b"end")
         self.assertEqual(self.receive()["ack"], add(seq, 3))
-        peer.process.wait(timeout=max(5, RTO * 4))
-        self.assertEqual(peer.process.returncode, 0, peer.errors())
+        self.send(
+            peer, seq=add(seq, 3), ack=add(fin["seq"], 1), flags=FIN | ACK
+        )
+        self.assertEqual(self.receive()["ack"], add(seq, 4))
+        peer.wait_closed()
         self.assertEqual(peer.output.read_bytes(), b"end")
 
     def test_sender_sequence_wraparound(self):
@@ -729,6 +774,176 @@ class CheckpointOne(unittest.TestCase):
         self.assertEqual((response["seq"], response["ack"]), (0, 1))
         self.assertEqual(peer.line(), "TRANSFER_DONE")
         peer.finish()
+
+    def test_initiator_close_waits_for_handshake(self):
+        peer = Peer(self, "initiator", self.port, hold=False)
+        seq, ack = self.initiator_handshake(peer)
+        fin = self.receive()
+        self.assertEqual(
+            (fin["flags"], fin["seq"], fin["ack"]), (FIN | ACK, ack, seq)
+        )
+        self.send(peer, seq=seq, ack=add(ack, 1), flags=FIN | ACK)
+        self.assertEqual(self.receive()["ack"], add(seq, 1))
+        peer.wait_closed()
+
+    def test_listener_close_waits_for_final_handshake_ack(self):
+        peer = Peer(self)
+        self.send(peer, seq=100, flags=SYN)
+        syn_ack = self.receive()
+        peer.request_close()
+        self.quiet()
+        self.assertIsNone(peer.process.poll())
+        self.send(peer, seq=101, ack=add(syn_ack["seq"], 1), flags=ACK)
+        fin = self.receive()
+        self.assertEqual(
+            (fin["flags"], fin["seq"], fin["ack"]),
+            (FIN | ACK, add(syn_ack["seq"], 1), 101),
+        )
+        self.send(peer, seq=101, ack=add(fin["seq"], 1), flags=FIN | ACK)
+        self.assertEqual(self.receive()["ack"], 102)
+        peer.wait_closed()
+
+    def test_fin_retransmission_and_receive_after_own_fin_ack(self):
+        peer = Peer(self, "initiator", self.port)
+        seq, ack = self.initiator_handshake(peer)
+        peer.request_close()
+        fin = self.receive()
+        self.assertEqual(
+            (fin["flags"], fin["seq"], fin["ack"], fin["data"]),
+            (FIN | ACK, ack, seq, b""),
+        )
+        # Neither an old ACK nor one past FIN may acknowledge the close.
+        self.send(peer, seq=seq, ack=ack, flags=ACK)
+        self.send(peer, seq=seq, ack=add(ack, 2), flags=ACK)
+        started = time.monotonic()
+        self.assertEqual(self.receive(), fin)
+        self.assertGreaterEqual(time.monotonic() - started, RTO * 0.7)
+        self.send(peer, seq=seq, ack=add(ack, 1), flags=ACK)
+        self.quiet(RTO * 1.2)
+        self.assertIsNone(peer.process.poll())
+        # FIN_WAIT_2 must acknowledge both duplicate and fresh peer data.
+        for _ in range(2):
+            self.send(peer, seq=seq, ack=add(ack, 1), flags=ACK, data=b"x")
+            response = self.receive()
+            self.assertEqual(
+                (response["flags"], response["seq"], response["ack"]),
+                (ACK, add(ack, 1), add(seq, 1)),
+            )
+        self.send(peer, seq=add(seq, 1), ack=add(ack, 1), flags=FIN | ACK)
+        final = self.receive()
+        self.assertEqual(final["ack"], add(seq, 2))
+        # Drop the final ACK: TIME_WAIT must answer the retransmitted FIN.
+        time.sleep(RTO * 1.1)
+        self.send(peer, seq=add(seq, 1), ack=add(ack, 1), flags=FIN | ACK)
+        self.assertEqual(self.receive(), final)
+        peer.wait_closed()
+
+    def test_combined_fin_ack_with_and_without_payload(self):
+        for payload in (b"", b"last"):
+            with self.subTest(payload=payload):
+                peer = Peer(self, "initiator", self.port)
+                seq, ack = self.initiator_handshake(peer)
+                peer.request_close()
+                self.assertEqual(self.receive()["flags"], FIN | ACK)
+                self.send(
+                    peer,
+                    seq=seq,
+                    ack=add(ack, 1),
+                    flags=FIN | ACK,
+                    data=payload,
+                )
+                final = self.receive()
+                self.assertEqual(
+                    (
+                        final["flags"],
+                        final["seq"],
+                        final["ack"],
+                        final["data"],
+                    ),
+                    (ACK, add(ack, 1), add(seq, len(payload) + 1), b""),
+                )
+                # Data arriving after the peer's FIN must not advance its EOF.
+                self.send(
+                    peer,
+                    seq=final["ack"],
+                    ack=add(ack, 1),
+                    flags=ACK,
+                    data=b"x",
+                )
+                self.assertEqual(self.receive(), final)
+                peer.wait_closed()
+
+    def test_peer_fin_delivers_eof_and_allows_response(self):
+        peer = Peer(self, receive_length="eof")
+        seq, ack = self.listener_handshake(peer)
+        # An out-of-order FIN cannot prematurely terminate the receive stream.
+        self.send(peer, seq=add(seq, 2), ack=ack, flags=FIN | ACK)
+        self.assertEqual(self.receive()["ack"], seq)
+        self.send(peer, seq=seq, ack=ack, flags=FIN | ACK, data=b"hi")
+        response = self.receive()
+        self.assertEqual(
+            (response["flags"], response["ack"]), (ACK, add(seq, 3))
+        )
+        self.assertEqual(peer.line(), "TRANSFER_DONE")
+        self.assertEqual(peer.output.read_bytes(), b"hi")
+        # The application writes this response only after cmu_read returns EOF.
+        received = bytearray()
+        while len(received) < 5:
+            data = self.receive()
+            self.assertEqual(data["seq"], add(ack, len(received)))
+            self.assertEqual(data["ack"], add(seq, 3))
+            received.extend(data["data"])
+            self.send(
+                peer, seq=add(seq, 3), ack=add(ack, len(received)), flags=ACK
+            )
+        self.assertEqual(received, b"reply")
+        peer.request_close()
+        fin = self.receive()
+        self.assertEqual((fin["flags"], fin["seq"]), (FIN | ACK, add(ack, 5)))
+        self.assertEqual(self.receive(), fin)
+        self.send(peer, seq=add(seq, 3), ack=add(ack, 6), flags=ACK)
+        peer.wait_closed()
+
+    def test_close_drains_unacknowledged_data_before_fin(self):
+        outgoing = b"d" * min(WINDOW, MSS + 1)
+        peer = Peer(self, "initiator", self.port, outgoing=outgoing)
+        seq, ack = self.initiator_handshake(peer)
+        initial = self.collect_bytes(len(outgoing))
+        peer.request_close()
+        retransmitted = self.collect_bytes(len(outgoing))
+        self.assertEqual(retransmitted, initial)
+        self.send(peer, seq=seq, ack=add(ack, len(outgoing)), flags=ACK)
+        fin = self.receive()
+        self.assertEqual(fin["flags"], FIN | ACK)
+        self.assertEqual(fin["seq"], add(ack, len(outgoing)))
+        self.send(peer, seq=seq, ack=add(fin["seq"], 1), flags=FIN | ACK)
+        self.assertEqual(self.receive()["ack"], add(seq, 1))
+        peer.wait_closed()
+
+    def test_simultaneous_fin_and_sequence_wraparound(self):
+        peer = Peer(self, "initiator", self.port, initial_sequence=MASK - 1)
+        seq, ack = self.initiator_handshake(peer, seq=MASK - 1)
+        self.assertEqual((seq, ack), (MASK, MASK))
+        peer.request_close()
+        fin = self.receive()
+        self.assertEqual((fin["flags"], fin["seq"]), (FIN | ACK, MASK))
+        # Crossed FINs do not themselves acknowledge the locally sent FIN.
+        self.send(peer, seq=MASK, flags=FIN)
+        response = self.receive()
+        self.assertEqual(
+            (response["flags"], response["seq"], response["ack"]), (ACK, 0, 0)
+        )
+        retransmitted = self.receive()
+        self.assertEqual(
+            (
+                retransmitted["flags"],
+                retransmitted["seq"],
+                retransmitted["ack"],
+            ),
+            (FIN | ACK, MASK, 0),
+        )
+        self.send(peer, seq=0, ack=0, flags=ACK)
+        peer.wait_closed()
 
     def transfer(self, lossy):
         size = max(
