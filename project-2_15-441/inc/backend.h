@@ -16,11 +16,17 @@
 #ifndef PROJECT_2_15_441_INC_BACKEND_H_
 #define PROJECT_2_15_441_INC_BACKEND_H_
 
+#include "cmu_tcp.h"
+
 /**
  * Launches the CMU-TCP backend.
  *
  * @param in the socket to be used for backend processing.
  */
 void* begin_backend(void* in);
+
+/* Internal buffer helpers. The caller must hold the socket's lock. */
+int buffer_append(cmu_buffer_t* buffer, const void* data, size_t length);
+void buffer_consume(cmu_buffer_t* buffer, size_t length);
 
 #endif  // PROJECT_2_15_441_INC_BACKEND_H_

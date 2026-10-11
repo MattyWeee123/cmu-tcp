@@ -16,6 +16,7 @@
 
 #include <netinet/in.h>
 #include <pthread.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -30,6 +31,7 @@
 typedef struct {
   uint32_t next_seq_expected;
   uint32_t last_ack_received;
+  uint32_t next_seq_to_send;
 } window_t;
 
 /**
@@ -40,25 +42,33 @@ typedef enum {
   TCP_LISTENER = 1,
 } cmu_socket_type_t;
 
+/* A growable byte queue; consumed space is reused on the next append. */
+typedef struct {
+  uint8_t* data;
+  size_t offset;
+  size_t length;
+  size_t capacity;
+} cmu_buffer_t;
+
 /**
- * This structure holds the state of a socket. You may modify this structure as
- * you see fit to include any additional state you need for your implementation.
+ * Application buffers and lifecycle flags are protected by lock. The backend
+ * exclusively owns conn and window after cmu_socket starts its thread.
  */
 typedef struct {
   int socket;
   pthread_t thread_id;
   uint16_t my_port;
   struct sockaddr_in conn;
-  uint8_t* received_buf;
-  int received_len;
-  pthread_mutex_t recv_lock;
-  pthread_cond_t wait_cond;
-  uint8_t* sending_buf;
-  int sending_len;
   cmu_socket_type_t type;
-  pthread_mutex_t send_lock;
+  pthread_mutex_t lock;
+  pthread_cond_t wait_cond;
+  cmu_buffer_t receive_buffer;
+  cmu_buffer_t send_buffer;
+  int wake_pipe[2];
   int dying;
-  pthread_mutex_t death_lock;
+  int backend_done;
+  int error;
+  uint32_t initial_seq;
   window_t window;
 } cmu_socket_t;
 
