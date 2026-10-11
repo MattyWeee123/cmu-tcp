@@ -196,11 +196,8 @@ class Relay:
                 target = self.destination
             if target is None:
                 continue
-            # The proxy is the UDP endpoint visible to each peer, so rewrite
-            # only the transport ports; all protocol state/payload is untouched.
-            values = list(HEADER.unpack(data[:25]))
-            values[1], values[2] = self.port, target[1]
-            data = HEADER.pack(*values) + data[25:]
+            # A UDP relay/NAT forwards the payload unchanged, including embedded
+            # CMU-TCP ports. Routing uses the actual UDP endpoint addresses.
             if self.lossy and self.random.random() < 0.07:
                 self.dropped += 1
                 continue
@@ -345,6 +342,56 @@ class CheckpointOne(unittest.TestCase):
         self.assertGreaterEqual(time.monotonic() - started, RTO * 0.7)
         self.assertEqual(first["flags"], SYN)
 
+    def test_ack_probe_does_not_match_queued_application_data(self):
+        peer = Peer(
+            self, "initiator", self.port, outgoing=b"queued", receive_length=1
+        )
+        seq, ack = self.initiator_handshake(peer, seq=302)
+        # Reproduce a peer that distinguishes ACK packets by their flag, as the
+        # starter backend does, while the application already has data queued.
+        time.sleep(min(0.01, RTO / 10))
+        self.send(peer, seq=seq, ack=ack, data=b"x")
+        response = self.receive()
+        while response["flags"] != ACK:
+            self.assertEqual(response["flags"], 0)
+            self.assertEqual(response["data"], b"queued")
+            self.send(peer, seq=add(seq, 1), ack=add(ack, 6), flags=ACK)
+            response = self.receive()
+        self.assertEqual(response["ack"], 304)
+        self.assertEqual(response["data"], b"")
+        self.assertEqual(peer.line(), "TRANSFER_DONE")
+        peer.finish()
+
+    def test_handshake_and_data_through_payload_preserving_udp_relay(self):
+        peer = Peer(self, receive_length=1)
+        relay = Relay(peer.port, False)
+        self.addCleanup(relay.close)
+        target = ("127.0.0.1", relay.port)
+        self.sock.sendto(
+            packet(self.port, peer.port, seq=100, flags=SYN), target
+        )
+        self.sock.settimeout(max(2, RTO * 2))
+        response = decode(self.sock.recvfrom(65535)[0])
+        self.assertEqual(
+            (response["flags"], response["ack"]), (SYN | ACK, 101)
+        )
+        self.sock.sendto(
+            packet(
+                self.port,
+                peer.port,
+                seq=101,
+                ack=add(response["seq"], 1),
+                flags=ACK,
+                data=b"x",
+            ),
+            target,
+        )
+        response = decode(self.sock.recvfrom(65535)[0])
+        self.assertEqual((response["flags"], response["ack"]), (ACK, 102))
+        self.assertEqual(peer.line(), "TRANSFER_DONE")
+        self.assertEqual(peer.output.read_bytes(), b"x")
+        peer.finish()
+
     def test_listener_retransmits_same_syn_ack(self):
         peer = Peer(self)
         self.send(peer, seq=99, flags=SYN)
@@ -360,8 +407,6 @@ class CheckpointOne(unittest.TestCase):
             dict(hlen=24),
             dict(plen=26),
             dict(ext=1),
-            dict(dst=add(peer.port, 1) % 65536),
-            dict(src=(self.port + 1) % 65536),
             dict(flags=ACK),
             dict(flags=SYN | ACK),
             dict(flags=SYN | 1),

@@ -116,8 +116,10 @@ static int send_final_ack(backend_t* backend) {
 }
 
 static int send_segment(backend_t* backend, segment_t* segment) {
+  /* Keep data distinct from pure ACK packets for starter-code peers. Receive
+   * processing still accepts data with the ACK flag as well as without it. */
   return send_packet(backend, segment->seq,
-                     backend->sock->window.next_seq_expected, ACK_FLAG_MASK,
+                     backend->sock->window.next_seq_expected, 0,
                      segment->payload, segment->length);
 }
 
@@ -198,14 +200,11 @@ static int fill_window(backend_t* backend) {
 
 /* Validate one complete UDP datagram before trusting lengths or peer identity.
  */
-static int valid_packet(cmu_socket_t* sock, uint8_t* packet, ssize_t length,
-                        const struct sockaddr_in* source) {
+static int valid_packet(uint8_t* packet, ssize_t length) {
   if (length < (ssize_t)sizeof(cmu_tcp_header_t) || length > MAX_LEN) return 0;
   cmu_tcp_header_t* header = (cmu_tcp_header_t*)packet;
   uint16_t hlen = get_hlen(header);
-  return ntohl(header->identifier) == IDENTIFIER &&
-         get_src(header) == ntohs(source->sin_port) &&
-         get_dst(header) == sock->my_port && hlen >= sizeof(*header) &&
+  return ntohl(header->identifier) == IDENTIFIER && hlen >= sizeof(*header) &&
          hlen <= length &&
          hlen == sizeof(*header) + get_extension_length(header) &&
          get_plen(header) == length &&
@@ -221,7 +220,7 @@ static int same_peer(cmu_socket_t* sock, const struct sockaddr_in* source) {
 static int handle_packet(backend_t* backend, uint8_t* packet, ssize_t length,
                          const struct sockaddr_in* source) {
   cmu_socket_t* sock = backend->sock;
-  if (!valid_packet(sock, packet, length, source)) return EXIT_SUCCESS;
+  if (!valid_packet(packet, length)) return EXIT_SUCCESS;
   cmu_tcp_header_t* header = (cmu_tcp_header_t*)packet;
   uint8_t flags = get_flags(header);
   uint32_t seq = get_seq(header);
@@ -237,6 +236,8 @@ static int handle_packet(backend_t* backend, uint8_t* packet, ssize_t length,
     backend->handshake_deadline = now_ms() + DEFAULT_TIMEOUT;
     return send_handshake(backend);
   }
+  /* UDP performs demultiplexing. A relay can change its outer ports without
+   * rewriting the embedded CMU-TCP header, so pin the actual UDP endpoint. */
   if (!same_peer(sock, source)) return EXIT_SUCCESS;
 
   if (backend->state == SYN_SENT) {

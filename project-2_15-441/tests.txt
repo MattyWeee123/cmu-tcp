@@ -17,13 +17,18 @@ Coverage
 --------
 - Initiator SYN and listener SYN-ACK, including retransmission with the same ISN.
 - Random sequence initialization on both endpoints across repeated sockets.
-- Rejection of malformed packet sizes, header lengths, identifiers, ports,
+- Rejection of malformed packet sizes, header lengths, identifiers,
   flags, SYN-ACK acknowledgment numbers, and final handshake ACKs.
 - Duplicate SYN and SYN-ACK recovery, including loss of the final handshake ACK.
 - An ACK carrying data can complete the listener handshake.
 - No application data is transmitted before the handshake completes.
 - The initiator recovers when the listener starts after the first SYN.
 - Traffic from another UDP endpoint cannot change the established peer.
+- Handshake/data transfer through a UDP relay that preserves CMU-TCP headers,
+  even when the outer UDP ports differ from the embedded ports.
+- Outgoing data uses flags=0, so ACK-only probes cannot mistake queued
+  application data for an acknowledgment. This reproduces the observed
+  Gradescope ACK mismatch (303 received when 304 was expected).
 - In-order receive delivery and cumulative ACKs, with duplicate suppression
   and rejection of out-of-order data. Data with and without the ACK flag works.
 - Receive and send sequence wraparound, including SYN at UINT32_MAX.
@@ -67,5 +72,9 @@ Validation performed locally on macOS
 - Clang static analysis of backend.c and cmu_tcp.c.
 
 The supplied Scapy/Fabric tests require the Vagrant client/server environment;
-that environment was not available locally. Gradescope tests were not run.
+that environment was not available locally. The initial Gradescope result was
+used to add two interoperability regressions, bringing the local suite to 23
+tests. Both regressions fail on the original implementation and pass after the
+interoperability fixes. The impairment relay now preserves packet payloads
+instead of rewriting embedded ports.
 The optional FIN teardown bonus is outside this implementation's scope.
