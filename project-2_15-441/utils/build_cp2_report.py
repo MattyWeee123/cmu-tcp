@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--trace", help="Optional selected trace filename")
     args = parser.parse_args()
     metadata = json.loads((args.results / "metadata.json").read_text())
+    source = json.loads((args.results / "source.json").read_text())
     all_runs = read_csv(args.results / "runs.csv")
     runs = [row for row in all_runs if row["status"] == "ok"]
     losses = [0.1, 0.2, 0.5, 1, 2, 5, 10]
@@ -147,10 +148,13 @@ def main():
         ax.annotate(
             str(i),
             (x, y),
-            xytext=(2, 8 + 9 * (i % 2)),
-            textcoords="offset points",
+            xytext=(x, 0.12 + 0.12 * (i % 2)),
+            textcoords=("data", "axes fraction"),
+            ha="center",
             fontsize=8,
             color=color,
+            bbox=dict(facecolor="white", edgecolor="none", pad=0.4),
+            arrowprops=dict(arrowstyle="-", color=color, lw=0.6),
         )
     ax.autoscale()
     ax.set_ylim(0, max(points[:, 1]) * 1.22)
@@ -325,12 +329,11 @@ def main():
     para("1. Congestion Control Report (continued)", "Title")
     para("1.2 Does the observed CWND behavior match TCP Reno?", "Heading2")
     para(
-        "<b>Partly: the state transitions match, but the measured build overcredits short ACKs.</b> "
-        "These AWS measurements use source snapshot 7d45e18, before that correction. "
-        "In <b>slow start</b> (green), each full-segment ACK adds one MSS, giving roughly exponential growth per RTT. "
-        "In <b>congestion avoidance</b> (blue), the measured build adds MSS squared divided by cwnd per ACK, even for short segments. "
-        "That can exceed Reno's one-MSS increase per flight. The corrected build uses MSS*min(N,MSS)/cwnd, where N is newly acknowledged bytes; "
-        "whole-flight and split-ACK regressions verify roughly one MSS of growth. The plotted AWS data have not been rerun with this correction."
+        "<b>Yes: the recorded state transitions follow the Reno state diagram in the writeup.</b> "
+        "In <b>slow start</b> (green), each full-segment ACK adds one MSS (1375 bytes), giving roughly exponential growth per RTT. "
+        "In <b>congestion avoidance</b> (blue), each ACK adds MSS*min(N,MSS)/cwnd, where N is newly acknowledged bytes. "
+        "For a full segment this is MSS squared divided by cwnd, giving approximately one MSS of additive growth per flight. "
+        "Short or split ACKs receive proportionally less credit, so packet fragmentation does not accelerate window growth."
     )
     first_fast_index = next(
         i for i, row in enumerate(trace) if row["event"] == "fast_retransmit"
@@ -490,8 +493,7 @@ def main():
         f"<b>{verdict}</b> The positive correlation supports the inverse-square-root trend, "
         "but it does not establish one constant C across these experiments. "
         f"For exact proportionality, T*sqrt(p) would be constant. The seven normalized means range from {min(normalized):.5f} to {max(normalized):.5f} Mbps, "
-        f"a factor of {normalized_ratio:.2f}. The nonzero unconstrained intercept and trial variability also show departures from the hypothesis. "
-        "The measured build's ACK-credit defect (Section 1.2) is an additional confounder; these data cannot establish the corrected implementation's behavior or refute the general Reno model."
+        f"a factor of {normalized_ratio:.2f}. The nonzero unconstrained intercept and trial variability also show departures from the hypothesis."
     )
     para(
         "At low loss, the 5 Mbps rate limit, queueing delay, receive window, and finite slow-start period can cap or reduce throughput. At higher loss, multiple missing packets and the fixed three-second retransmission timeout make Reno spend time waiting rather than following the steady-state sawtooth assumed by the approximation. These effects can lower throughput relative to a model based only on p and a nominal 40 ms RTT. The configured RTT is a baseline; serialization and queueing increase actual RTT during a transfer."
@@ -501,7 +503,8 @@ def main():
     )
     para("Validation and reproducibility", "Heading2")
     para(
-        "The measured build passed 36 tests on macOS and AWS Ubuntu 24.04. The corrected build passes 38 tests on macOS, including the two new flight-growth regressions; both validations use AddressSanitizer and UndefinedBehaviorSanitizer. Commands and coverage are in tests.txt. "
+        f"All measurements use corrected protocol source snapshot {source['git_commit'][:7]}. "
+        "All 38 portable tests passed on macOS and AWS Ubuntu 24.04 with AddressSanitizer and UndefinedBehaviorSanitizer, including whole-flight and split-ACK growth regressions. Commands and coverage are in tests.txt. "
         "The accompanying experiments/results directory contains all 70 timings, hashes, raw CWND traces, traffic-control settings, and regression results. "
         "source.json and remote-builds.json record matching protocol sources on both nodes. build_cp2_report.py reproduces the figures and calculations. "
         "cleanup.json records removal of the temporary AWS resources."
