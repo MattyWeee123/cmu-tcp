@@ -104,19 +104,31 @@ def main():
     points = np.array(
         [[float(r["time_s"]), float(r["cwnd"]) / 1024] for r in trace]
     )
-    segments = np.stack([points[:-1], points[1:]], axis=1)
+    # State is constant between events, including an entire RTO wait.
+    segments, segment_colors = [], []
+    for index in range(1, len(points)):
+        previous, current = points[index - 1], points[index]
+        corner = (current[0], previous[1])
+        segments.extend([[previous, corner], [corner, current]])
+        segment_colors.extend(
+            [
+                state_colors[trace[index - 1]["state"]],
+                state_colors[trace[index]["state"]],
+            ]
+        )
     fig, ax = plt.subplots(figsize=(7, 3.5))
     ax.add_collection(
         LineCollection(
             segments,
-            colors=[state_colors[r["state"]] for r in trace[1:]],
+            colors=segment_colors,
             linewidth=1.4,
         )
     )
-    ax.plot(
+    ax.step(
         points[:, 0],
         [float(r["ssthresh"]) / 1024 for r in trace],
         "--",
+        where="post",
         color="#777777",
         lw=0.8,
         label="ssthresh",
@@ -163,6 +175,12 @@ def main():
         stds.append(float(np.std(values, ddof=1)))
     group_x = 1 / np.sqrt(np.array(losses) / 100)
     mean_r = float(pearsonr(group_x, means).statistic)
+    normalized = np.array(means) / group_x
+    normalized_ratio = float(max(normalized) / min(normalized))
+    high_loss_runs = [r for r in runs if float(r["loss_percent"]) == 10]
+    timeout_wait_share = sum(
+        counts(traces[r["trace"]])[1] * 3 for r in high_loss_runs
+    ) / sum(float(r["seconds"]) for r in high_loss_runs)
     fig, ax = plt.subplots(figsize=(7, 3.35))
     ax.scatter(
         x, y, s=14, alpha=0.35, color="#1761a0", label="Individual trials (70)"
@@ -207,6 +225,9 @@ def main():
         "r_squared": fit.rvalue**2,
         "pearson_r_group_means": mean_r,
         "origin_slope_mbps": origin_slope,
+        "normalized_group_means_mbps": list(normalized),
+        "normalized_max_min_ratio": normalized_ratio,
+        "high_loss_timeout_interval_share": timeout_wait_share,
         "mathis_dimensionless_C_at_40ms": origin_slope
         * 1e6
         * 0.040
@@ -304,13 +325,13 @@ def main():
         [1.45 * inch, 5.55 * inch],
     )
     para(
-        "Each sender is timed from its first application write until an application receipt confirms that the receiver has written all file bytes. Connection startup and the final receipt are included; FIN and TIME_WAIT are excluded. SHA-256 is compared after every transfer. The random payload and file size are identical across all trials."
+        "Timing starts just after socket creation and ends when an application receipt confirms that the receiver has written all file bytes. It includes the remaining connection establishment and final receipt; FIN and TIME_WAIT are excluded. SHA-256 is compared after every transfer. The random payload and file size are identical across all trials."
     )
     story.append(PageBreak())
     para("Congestion-window behavior", "Title")
     fast_count, timeout_count = counts(trace)
     para(
-        f"Selected connection: {chosen['loss_percent']}% sender loss, trial {chosen['run']}, {int(chosen['bytes']):,} bytes. Transfer time: {float(chosen['seconds']):.3f} s. The full trace contains {fast_count} triple-duplicate-ACK events and {timeout_count} timeouts. Colors identify the sender state after each event; numbered marks identify every loss response."
+        f"Selected connection: {chosen['loss_percent']}% sender loss, trial {chosen['run']}, {int(chosen['bytes']):,} bytes. Transfer time: {float(chosen['seconds']):.3f} s. The full trace contains {fast_count} triple-duplicate-ACK events and {timeout_count} timeout{'s' if timeout_count != 1 else ''}. Colors identify the sender state after each event; numbered marks identify every loss response."
     )
     story.append(
         Image(
@@ -336,7 +357,7 @@ def main():
         )
     table(rows, [0.5 * inch, 0.9 * inch, 2 * inch, 1.8 * inch, 1.8 * inch])
     para(
-        "Slow start grows rapidly as ACKs release more packets. After the threshold is reached, additive growth produces the congestion-avoidance ramp. Triple duplicate ACKs trigger immediate retransmission and temporary window inflation; the next advancing ACK deflates the window to ssthresh. A timeout indicates that ACK feedback was insufficient for fast recovery and restarts from one MSS. Multiple losses in a Reno window can therefore produce additional timeouts."
+        "Slow start grows rapidly; congestion avoidance produces the additive-growth ramp. The tall fast-recovery peaks reflect duplicate-ACK window inflation, while actual outstanding data remains bounded by rwnd. The next advancing ACK deflates cwnd to ssthresh. A timeout restarts from one MSS when ACK feedback is insufficient for fast recovery. Multiple losses in a Reno window can therefore produce additional timeouts."
     )
     para("Source trace: " + chosen["trace"], "Body")
     story.append(PageBreak())
@@ -391,20 +412,37 @@ def main():
     para(
         f"The group means show {strength} positive agreement with the inverse-square-root trend (r = {mean_r:.5f}). This supports the trend to that extent, but it does not establish the Mathis approximation as an exact model of these transfers. The reported intercept and trial variability quantify departures from a pure proportional relationship."
     )
+    verdict = (
+        "The pure proportional model does not adequately describe the entire loss range."
+        if normalized_ratio > 2
+        else "The normalized measurements are more consistent with an approximate proportional relationship."
+    )
+    para(
+        f"For an exact proportional law, T*sqrt(p) would be constant. Here the seven normalized means range from {min(normalized):.5f} to {max(normalized):.5f} Mbps, a factor of {normalized_ratio:.2f}. {verdict} A high correlation alone is insufficient to establish this stronger claim."
+    )
     para(
         "At low loss, the 5 Mbps rate limit, queueing delay, receive window, and finite slow-start period can cap or reduce throughput. At higher loss, multiple missing packets and the fixed three-second retransmission timeout make Reno spend time waiting rather than following the steady-state sawtooth assumed by the approximation. These effects can lower throughput relative to a model based only on p and a nominal 40 ms RTT. The configured RTT is a baseline; serialization and queueing increase actual RTT during a transfer."
     )
-    durations = [float(r["seconds"]) for r in runs]
     para(
-        f"Transfer durations range from {min(durations):.3f} to {max(durations):.3f} seconds. All 70 files passed the SHA-256 check. {len(all_runs) - len(runs)} failed attempts are retained separately in the raw run log and are excluded from the successful-trial fit. No missing data is interpolated. The experiment uses application goodput, so transport headers, retransmissions, and connection overhead do not count as delivered bytes."
+        f"For the ten 10% loss trials, the number of recorded timeouts multiplied by the fixed 3 s RTO accounts for approximately {timeout_wait_share:.1%} of total transfer time. This estimates the contribution of timeout intervals; it is not a direct measurement of link idleness."
+    )
+    durations = [float(r["seconds"]) for r in runs]
+    failed_count = len(all_runs) - len(runs)
+    failure_note = (
+        f"The raw run log retains {failed_count} failed attempts, excluded from the successful-trial fit."
+        if failed_count
+        else "No trials failed."
+    )
+    para(
+        f"Transfer durations range from {min(durations):.3f} to {max(durations):.3f} seconds. All 70 files passed the SHA-256 check. {failure_note} No missing data is interpolated. The experiment uses application goodput, so transport headers, retransmissions, and connection overhead do not count as delivered bytes."
     )
     para("Code validation", "Heading2")
     para(
-        "Portable tests use an independent UDP peer to check exact packet behavior, plus actual endpoints for integrity and loss recovery. Coverage includes initial window size, slow start, congestion avoidance, three duplicate ACKs, fast recovery, timeout reduction, flow-control limits, zero-window recovery, overlap/reordering, sequence wrap, handshake, peer isolation, and FIN teardown. AddressSanitizer and UndefinedBehaviorSanitizer runs include changed packet/buffer parameters and 1 MiB bidirectional transfers. A deterministic drop verifies that real endpoints recover before RTO. The experiment driver separately passed a 2 MiB byte-for-byte loopback transfer. Detailed commands and validation results are in tests.txt."
+        "All 36 portable tests passed on macOS and AWS Ubuntu 24.04 with AddressSanitizer and UndefinedBehaviorSanitizer. An independent UDP peer checks exact packet behavior, and actual endpoints verify integrity and loss recovery. Coverage includes initial window size, slow start, congestion avoidance, three duplicate ACKs, fast recovery, timeout reduction, flow-control limits, zero-window recovery, overlap/reordering, sequence wrap, handshake, peer isolation, and FIN teardown. Additional sanitizer checks cover changed packet/buffer parameters and 1 MiB bidirectional transfers. A deterministic drop verifies recovery before RTO. The experiment driver separately passed a 2 MiB byte-for-byte loopback transfer. Commands and validation results are in tests.txt."
     )
     para("Reproducibility", "Heading2")
     para(
-        "run_cp2_experiments.py records the traffic-control configuration, protocol constants, payload checksum, per-run throughput, and raw congestion trace. build_cp2_report.py validates ten successful trials per loss rate, computes both regression forms, and renders this report. runs.csv, metadata.json, analysis.json, and all referenced traces accompany the report. The AWS instances are temporary and are terminated after the results are collected."
+        "run_cp2_experiments.py records network settings, protocol constants, payload checksums, throughput, and raw congestion traces. build_cp2_report.py validates ten successful trials per loss rate, computes both regression forms, and renders this report. The data and calculations accompany the report in experiments/results. source.json and remote-builds.json verify matching C source and header hashes on both AWS nodes. The temporary instances are terminated after collecting the results; cleanup.json records removal of their volumes, security group, and keys."
     )
     para("References", "Heading2")
     para(

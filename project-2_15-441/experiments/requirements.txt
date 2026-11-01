@@ -1,0 +1,5 @@
+# Report environment used for the saved measurements and PDF (Python 3.12).
+matplotlib==3.11.2
+numpy==2.3.5
+scipy==1.18.1
+reportlab==4.4.9

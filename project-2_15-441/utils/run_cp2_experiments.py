@@ -136,7 +136,7 @@ def main():
         "runs_per_loss": args.runs,
         "loss_percent": args.losses,
         "receiver_private_ip": args.receiver_ip,
-        "timing": "sender first write through application receipt; excludes FIN/TIME_WAIT",
+        "timing": "sender just after socket creation through application receipt; excludes FIN/TIME_WAIT",
         "sender_uname": sender.run("uname -a").strip(),
         "receiver_uname": receiver.run("uname -a").strip(),
         "grading_header": sender.run(prefix + "cat inc/grading.h"),

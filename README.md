@@ -155,15 +155,16 @@ python3 utils/run_cp2_experiments.py \
 The runner applies 5 Mbps and 20 ms egress delay on each node, with loss only
 on the sender. It performs ten transfers at each of 0.1%, 0.2%, 0.5%, 1%, 2%,
 5%, and 10% loss. Each run verifies SHA-256 equality, records raw timing and
-congestion traces, and saves traffic-control configuration. Timing includes
-connection startup and receiver completion acknowledgment, and excludes FIN
-and TIME_WAIT. Existing successful runs are preserved when resuming. Failed
-runs remain in the results and stop the sweep for investigation.
+congestion traces, and saves traffic-control configuration. Timing starts just
+after socket creation and ends at the receiver completion acknowledgment,
+excluding FIN and TIME_WAIT. Existing successful runs are preserved when
+resuming. Failed runs remain in the results and stop the sweep for investigation.
 
-Generate the PDF after collecting the complete sweep (requires matplotlib,
-numpy, scipy, and reportlab):
+Generate the PDF after collecting the complete sweep (tested with Python 3.12;
+requires matplotlib, numpy, scipy, and reportlab):
 
 ```bash
+python3 -m pip install -r experiments/requirements.txt
 python3 utils/build_cp2_report.py experiments/results \
   --output ../output/pdf/checkpoint2-report.pdf
 ```

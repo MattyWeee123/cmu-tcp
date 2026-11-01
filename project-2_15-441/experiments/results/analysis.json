@@ -1,0 +1,21 @@
+{
+  "ols_slope_mbps": 0.16328103687450837,
+  "ols_intercept_mbps": -0.39020878432957384,
+  "pearson_r_all_trials": 0.913020169460544,
+  "r_squared": 0.8336058298417605,
+  "pearson_r_group_means": 0.9595923466583718,
+  "origin_slope_mbps": 0.14401321756060775,
+  "normalized_group_means_mbps": [
+    0.1352273308338239,
+    0.16065055882230386,
+    0.20457169892680988,
+    0.10111063675000001,
+    0.07048284308116627,
+    0.026041837339448898,
+    0.012185640775752812
+  ],
+  "normalized_max_min_ratio": 16.78793119635284,
+  "high_loss_timeout_interval_share": 0.9532441870842845,
+  "mathis_dimensionless_C_at_40ms": 0.5236844274931192,
+  "selected_trace": "loss-0.2-run-08.csv"
+}
