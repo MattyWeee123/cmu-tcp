@@ -325,9 +325,12 @@ def main():
     para("1. Congestion Control Report (continued)", "Title")
     para("1.2 Does the observed CWND behavior match TCP Reno?", "Heading2")
     para(
-        "<b>Yes: the recorded window transitions match the Reno state diagram in the writeup.</b> "
-        "In <b>slow start</b> (green), each new full-segment ACK adds one MSS (1375 bytes), giving roughly exponential growth per RTT. "
-        "In <b>congestion avoidance</b> (blue), each new ACK adds MSS squared divided by cwnd, giving approximately one MSS of additive growth per RTT."
+        "<b>Partly: the state transitions match, but the measured build overcredits short ACKs.</b> "
+        "These AWS measurements use source snapshot 7d45e18, before that correction. "
+        "In <b>slow start</b> (green), each full-segment ACK adds one MSS, giving roughly exponential growth per RTT. "
+        "In <b>congestion avoidance</b> (blue), the measured build adds MSS squared divided by cwnd per ACK, even for short segments. "
+        "That can exceed Reno's one-MSS increase per flight. The corrected build uses MSS*min(N,MSS)/cwnd, where N is newly acknowledged bytes; "
+        "whole-flight and split-ACK regressions verify roughly one MSS of growth. The plotted AWS data have not been rerun with this correction."
     )
     first_fast_index = next(
         i for i, row in enumerate(trace) if row["event"] == "fast_retransmit"
@@ -487,7 +490,8 @@ def main():
         f"<b>{verdict}</b> The positive correlation supports the inverse-square-root trend, "
         "but it does not establish one constant C across these experiments. "
         f"For exact proportionality, T*sqrt(p) would be constant. The seven normalized means range from {min(normalized):.5f} to {max(normalized):.5f} Mbps, "
-        f"a factor of {normalized_ratio:.2f}. The nonzero unconstrained intercept and trial variability also show departures from the hypothesis."
+        f"a factor of {normalized_ratio:.2f}. The nonzero unconstrained intercept and trial variability also show departures from the hypothesis. "
+        "The measured build's ACK-credit defect (Section 1.2) is an additional confounder; these data cannot establish the corrected implementation's behavior or refute the general Reno model."
     )
     para(
         "At low loss, the 5 Mbps rate limit, queueing delay, receive window, and finite slow-start period can cap or reduce throughput. At higher loss, multiple missing packets and the fixed three-second retransmission timeout make Reno spend time waiting rather than following the steady-state sawtooth assumed by the approximation. These effects can lower throughput relative to a model based only on p and a nominal 40 ms RTT. The configured RTT is a baseline; serialization and queueing increase actual RTT during a transfer."
@@ -497,7 +501,7 @@ def main():
     )
     para("Validation and reproducibility", "Heading2")
     para(
-        "All 36 portable tests passed on macOS and AWS Ubuntu 24.04 with AddressSanitizer and UndefinedBehaviorSanitizer; commands and coverage are in tests.txt. "
+        "The measured build passed 36 tests on macOS and AWS Ubuntu 24.04. The corrected build passes 38 tests on macOS, including the two new flight-growth regressions; both validations use AddressSanitizer and UndefinedBehaviorSanitizer. Commands and coverage are in tests.txt. "
         "The accompanying experiments/results directory contains all 70 timings, hashes, raw CWND traces, traffic-control settings, and regression results. "
         "source.json and remote-builds.json record matching protocol sources on both nodes. build_cp2_report.py reproduces the figures and calculations. "
         "cleanup.json records removal of the temporary AWS resources."
