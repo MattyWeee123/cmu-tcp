@@ -1,0 +1,15 @@
+{
+  "git_commit": "7d45e18da14ad49b5610862f59817e4b9456e254",
+  "source_sha256": {
+    "project-2_15-441/src/cmu_packet.c": "adfc827f2dab4718b8e96a2ecf9c5b6aa58d5beae3837199de00644b01b7438f",
+    "project-2_15-441/src/server.c": "e5cbb54b695a5466963b597055657a3ee28e40610a1e0060b22b85efdab1e300",
+    "project-2_15-441/src/client.c": "b3fced2b21e3651e2165b172e1815b2d995b5b2737895187f7a904b73ddaade3",
+    "project-2_15-441/src/cmu_tcp.c": "7153135307349dd507181ba957a600fe466629ac93164c4800b6a039c0dd30b9",
+    "project-2_15-441/src/backend.c": "6ffe78bb1afc4b1a2452987d23ee4b06a96ecf9976c096198848a0b34444b811",
+    "project-2_15-441/inc/cmu_tcp.h": "3dd1a419d11f61cfc672606db9c623acf94ab1c699a1c757f6ca6aaca9350bbd",
+    "project-2_15-441/inc/grading.h": "622dfef6ce49df4beb13ceed21b1634362adce3cade18a76f026c6c7420ec6cd",
+    "project-2_15-441/inc/backend.h": "72a03a365edac3270d7633f684f09370dba26ba13d07be2cd0526212f042990e",
+    "project-2_15-441/inc/cmu_packet.h": "8f088f5944b047522824868bbeb068595b3ce6fabc4ed3157c6fb4d45bb43343",
+    "project-2_15-441/tests/cp2_transfer.c": "d060ea428098de84a935c97f9616f53dc744617a29e11e019a6dd4dbb34baf8a"
+  }
+}
