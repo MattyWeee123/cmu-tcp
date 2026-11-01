@@ -103,41 +103,62 @@ slow-start threshold (`ssthresh`), and congestion-control stage whenever they ch
 Plot `cwnd` over time from these logs and label slow start, congestion avoidance,
 fast recovery, triple-duplicate-ACK events, and timeouts.
 
-## Portable checkpoint 1 tests
+## Checkpoint 2 implementation and portable tests
 
-The required CP1 mechanisms are implemented in `backend.c`: connection setup,
-random initial sequence numbers, a byte-based fixed window, cumulative ACKs,
-and Go-Back-N timeout recovery. The backend polls the UDP socket and an
-application wakeup pipe, so receiving and retransmission continue independently
-of application reads and writes. The public socket API and packet format are
-unchanged. FIN teardown supports independent close in each direction, timeout
-retransmission, and simultaneous close. Closing drains queued and outstanding
-data before sending FIN, then keeps receiving until the peer sends FIN. A peer
-FIN causes reads to return EOF after buffered data is drained; writes remain
-available until the application closes. TIME_WAIT retains the endpoint to
-acknowledge a retransmitted peer FIN. CP2 congestion/flow control is not implemented.
+The backend implements TCP Reno slow start, congestion avoidance, fast
+retransmit after three duplicate ACKs, and fast recovery. The send limit is
+`min(cwnd, advertised_window)`. Timeout recovery retransmits the oldest missing
+segment and restarts slow start. Ordered and reordered receive bytes share a
+bounded budget; the advertised sequence interval keeps its right edge stable
+when reordered packets arrive. The send budget includes queued and transmitted
+but unacknowledged bytes, so `cmu_write` applies backpressure when it is full.
+Application reads reopen a zero receive window, and persist probes recover a
+lost window update. SYN/FIN retransmission, half-close, and sequence wraparound
+remain supported.
 
-A portable suite runs with Python 3.9+ and a C11 compiler, without root access,
-Scapy, Docker, or Vagrant:
+The packet format, public socket API, and submitted `grading.h` are unchanged.
+Set `CMU_TCP_TRACE` to a CSV path to record congestion changes, ACKs, receive
+window changes, fast retransmissions, and timeouts for one connection.
+
+The portable tests require Python 3.9+ and a C11 compiler:
 
 ```bash
 cd project-2_15-441
 make
 make test-local
+CP1_TEST_SANITIZE=1 make test-local
+CP1_TEST_MAX_LEN=512 CP2_TEST_INITIAL_WINDOW=974 \
+  CP2_TEST_SSTHRESH=3896 CP2_TEST_BUFFER=3927 make test-local
 ```
 
-These tests compile a temporary copy with a 200 ms retransmission timeout to
-keep the suite fast. The submitted `grading.h` retains the assignment's 3000 ms
-timeout. For additional configurations:
+The suite combines independent packet-level assertions with real bidirectional
+transfers, including loss, duplication, and reordering. It compiles temporary
+copies of `grading.h`; the default test timeout is 200 ms. Use
+`CP1_TEST_TIMEOUT=3000` to retain the assignment timeout, and
+`CP1_TEST_TRANSFER_BYTES=1048576` for larger transfers. `tests.txt` records
+coverage and validation. The historical CP1 suite is retained for reference;
+its fixed-window/Go-Back-N expectations are superseded by the CP2 suite.
+
+## Checkpoint 2 experiments
+
+Build the measurement driver with `make tests/cp2_transfer`. On two AWS Ubuntu
+instances, install a C compiler, Python 3, and `tcconfig` in `/opt/cp2-tools`.
+Copy this project to `~/cmu-cp2/` and build it on both nodes. Then run:
 
 ```bash
-CP1_TEST_SANITIZE=1 make test-local
-CP1_TEST_WINDOW=509 CP1_TEST_MAX_LEN=512 make test-local
-CP1_TEST_TIMEOUT=3000 python3 tests/test_cp1_local.py CheckpointOne.test_initiator_retransmits_same_syn
+python3 utils/run_cp2_experiments.py \
+  --sender ubuntu@SENDER_PUBLIC_IP --receiver ubuntu@RECEIVER_PUBLIC_IP \
+  --receiver-ip RECEIVER_PRIVATE_IP --key /path/to/ssh-key \
+  --output experiments/results
 ```
 
-`tests.txt` describes coverage and validation. The original container-based
-tests below remain available.
+The runner applies 5 Mbps and 20 ms egress delay on each node, with loss only
+on the sender. It performs ten transfers at each of 0.1%, 0.2%, 0.5%, 1%, 2%,
+5%, and 10% loss. Each run verifies SHA-256 equality, records raw timing and
+congestion traces, and saves traffic-control configuration. Timing includes
+connection startup and receiver completion acknowledgment, and excludes FIN
+and TIME_WAIT. Existing successful runs are preserved when resuming. Failed
+runs remain in the results and stop the sweep for investigation.
 
 ## Automatic tests
 

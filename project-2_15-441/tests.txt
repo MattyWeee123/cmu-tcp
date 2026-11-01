@@ -1,5 +1,53 @@
-Checkpoint 1 testing
+Checkpoint 2 testing
 ====================
+
+Current command: make test-local (or make test-cp2).
+The historical checkpoint 1 record follows below; its fixed-window and
+Go-Back-N requirements are superseded by TCP Reno in this checkpoint.
+
+The CP2 suite contains 34 tests. Nine packet-level tests check initial cwnd,
+slow-start growth, congestion avoidance, three duplicate ACK fast retransmit,
+fast recovery inflation/exit, timeout reduction, advertised send-window bounds,
+zero-window persist/reopening, receive-buffer bounds, duplicate suppression,
+and ordered delivery across overlap and sequence wrap. A deterministic relay
+also drops one packet between two actual endpoints and checks recovery before
+RTO, fast-recovery instrumentation, and complete file integrity. Twenty-four
+handshake, peer-isolation, transfer, and FIN regression tests are reused.
+
+MAX_NETWORK_BUFFER bounds unread ordered plus reordered payload, and queued
+plus unacknowledged outgoing payload. The receive advertised window is the
+sequence interval starting at RCV.NXT; already buffered out-of-order bytes lie
+inside this interval, so they do not shrink its right edge (RFC 9293, 3.8.6).
+The bounded ring still accounts for every occupied byte when accepting data.
+
+Validation on macOS:
+- make clean all tests/cp2_transfer: no compiler warnings.
+- 33-test suite with ASan/UBSan, including 1 MiB transfers each direction.
+- 33-test suite with MAX_LEN=512, initial window=974, threshold=3896,
+  receive/send budget=3927, and ASan/UBSan.
+- Added deterministic real-peer fast-retransmit test passes with ASan/UBSan.
+- Default 3000 ms RTO checks for timeout, fast recovery, and zero-window persist.
+- 2 MiB transfer through the experiment driver, verified byte for byte.
+- Clang static analysis of backend.c and cmu_tcp.c.
+
+Test-only overrides (temporary grading.h; submitted file is unchanged):
+    CP2_TEST_INITIAL_WINDOW  initial cwnd in bytes (default 2*MSS)
+    CP2_TEST_SSTHRESH        initial threshold (default 8*MSS)
+    CP2_TEST_BUFFER          send/receive payload budget (default 8*MSS+31)
+    CP1_TEST_TIMEOUT         retransmission timeout in ms (default 200)
+    CP1_TEST_MAX_LEN         maximum packet size
+    CP1_TEST_TRANSFER_BYTES  minimum transfer size in each direction
+    CP1_TEST_SANITIZE=1      AddressSanitizer and UndefinedBehaviorSanitizer
+
+Experiment tools: tests/cp2_transfer.c and utils/run_cp2_experiments.py.
+The driver uses only the public socket API and prints a JSON measurement when
+an application-level receipt confirms all file bytes have reached the peer.
+The runner uses SSH, tcconfig, and sha256sum on two separate AWS nodes. It
+retains per-run CSV traces, throughput, timing, checksums, and network settings.
+Python matplotlib, numpy, scipy, and reportlab are used for report generation.
+
+Historical checkpoint 1 testing
+===============================
 
 Run the portable suite from project-2_15-441 with:
     make test-local

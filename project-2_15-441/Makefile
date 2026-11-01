@@ -8,7 +8,7 @@ FLAGS = -pthread -fPIC -g -ggdb -pedantic -Wall -Wextra -DDEBUG -I$(INC_DIR)
 OBJS = $(BUILD_DIR)/cmu_packet.o $(BUILD_DIR)/cmu_tcp.o $(BUILD_DIR)/backend.o
 HEADERS = $(wildcard $(INC_DIR)/*.h)
 
-.PHONY: all format test test-local clean
+.PHONY: all format test test-local test-cp2 clean
 
 all: server client tests/testing_server
 
@@ -27,6 +27,9 @@ client: $(OBJS) $(SRC_DIR)/client.c
 tests/testing_server: $(OBJS)
 	$(CC) $(FLAGS) tests/testing_server.c -o tests/testing_server $(OBJS)
 
+tests/cp2_transfer: $(OBJS) tests/cp2_transfer.c
+	$(CC) $(FLAGS) tests/cp2_transfer.c -o $@ $(OBJS)
+
 format:
 	pre-commit run --all-files
 
@@ -35,8 +38,10 @@ test:
 	sudo -E python3 tests/test_cp1_basic_ack_packets.py
 
 test-local:
-	$(PYTHON) tests/test_cp1_local.py
+	$(PYTHON) tests/test_cp2_local.py
+
+test-cp2: test-local
 
 clean:
 	rm -f $(BUILD_DIR)/*.o peer client server
-	rm -f tests/testing_server
+	rm -f tests/testing_server tests/cp2_transfer
