@@ -1,0 +1,14 @@
+{
+  "confirmed_utc": "2026-11-01T13:13:26.884602+00:00",
+  "terminated_instances": [
+    "i-0fd53ef6eacebf3f9",
+    "i-017dffd0d2976bfb0"
+  ],
+  "deleted_volumes": [
+    "vol-0e94cd396ba2985f6",
+    "vol-07f16fad4479067d6"
+  ],
+  "deleted_security_group": "sg-0473ca254c634416b",
+  "deleted_key_pair": "cmu-cp2-20261101",
+  "local_key_removed": true
+}

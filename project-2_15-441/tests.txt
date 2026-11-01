@@ -28,11 +28,18 @@ Validation on macOS:
 - 33-test suite with ASan/UBSan, including 1 MiB transfers each direction.
 - 33-test suite with MAX_LEN=512, initial window=974, threshold=3896,
   receive/send budget=3927, and ASan/UBSan.
-- Full 34-test suite including real-peer fast retransmit passes with ASan/UBSan.
-- Added partial-ACK and reordered-FIN regressions pass with ASan/UBSan.
+- Full 36-test suite, including real-peer fast retransmit, partial ACKs,
+  and reordered FIN, passes with ASan/UBSan.
 - Default 3000 ms RTO checks for timeout, fast recovery, and zero-window persist.
 - 2 MiB transfer through the experiment driver, verified byte for byte.
 - Clang static analysis of backend.c and cmu_tcp.c.
+
+Validation on AWS Ubuntu 24.04 (GCC 13.3.0):
+- All 36 tests pass with ASan/UBSan after removing experiment traffic shaping.
+- Seventy 2 MiB transfers pass SHA-256 checks: ten at each required loss rate.
+- Both instances' C source and header hashes match the recorded source snapshot.
+- Raw timings, traces, shaping settings, build metadata, and report calculations
+  are retained under experiments/results.
 
 Test-only overrides (temporary grading.h; submitted file is unchanged):
     CP2_TEST_INITIAL_WINDOW  initial cwnd in bytes (default 2*MSS)
@@ -144,7 +151,7 @@ Validation performed locally on macOS
 - Clang static analysis of backend.c and cmu_tcp.c.
 
 The supplied Scapy/Fabric tests require the Vagrant client/server environment;
-that environment was not available locally. The current suite contains 31 tests.
+that environment was not available locally. The CP1 suite contained 31 tests.
 Gradescope exposed that clearing ACK on outgoing data breaks the retransmission
 and windowing tests. The local packet assertions now enforce that requirement
 and reproduce the flags=0 versus ACK=4 failure before the fix. Header-preserving
