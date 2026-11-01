@@ -146,12 +146,23 @@ def main():
         json.dumps(metadata, indent=2) + "\n"
     )
     for loss in args.losses:
-        configuration = shape(sender, loss)
-        (args.output / f"tc-loss-{loss:g}.json").write_text(configuration)
         for run in range(1, args.runs + 1):
             if (loss, run) in completed:
                 continue
             name = f"loss-{loss:g}-run-{run:02d}"
+            configuration = shape(sender, loss)
+            receiver_configuration = shape(receiver, 0)
+            (args.output / f"tc-loss-{loss:g}.json").write_text(configuration)
+            (args.output / (name + ".network.json")).write_text(
+                json.dumps(
+                    {
+                        "sender": json.loads(configuration),
+                        "receiver": json.loads(receiver_configuration),
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
             row = dict.fromkeys(fields, "")
             row.update(
                 loss_percent=loss,
