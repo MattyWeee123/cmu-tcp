@@ -64,6 +64,7 @@ typedef struct {
   pthread_cond_t wait_cond;
   cmu_buffer_t receive_buffer;
   cmu_buffer_t send_buffer;
+  size_t send_buffered;  // Queued plus transmitted, unacknowledged bytes.
   int wake_pipe[2];
   int dying;
   int read_eof;

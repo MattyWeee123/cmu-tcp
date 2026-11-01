@@ -22,6 +22,7 @@
 #include <limits.h>
 #include <poll.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -29,12 +30,19 @@
 
 _Static_assert(MAX_LEN > sizeof(cmu_tcp_header_t) && MAX_LEN <= UINT16_MAX,
                "MAX_LEN must fit a CMU-TCP packet");
-_Static_assert(CP1_WINDOW_SIZE > 0 && CP1_WINDOW_SIZE < INT32_MAX,
-               "The sending window must fit in half the sequence space");
+_Static_assert(MAX_NETWORK_BUFFER > 0 && MAX_NETWORK_BUFFER < INT32_MAX,
+               "Buffers must fit in half the sequence space");
+_Static_assert(WINDOW_INITIAL_WINDOW_SIZE > 0 && WINDOW_INITIAL_SSTHRESH > 0,
+               "Initial congestion limits must be positive");
 _Static_assert(DEFAULT_TIMEOUT > 0,
                "The retransmission timeout must be positive");
 
 typedef enum { LISTEN, SYN_SENT, SYN_RECEIVED, ESTABLISHED } connection_state_t;
+typedef enum {
+  SLOW_START,
+  CONGESTION_AVOIDANCE,
+  FAST_RECOVERY
+} congestion_state_t;
 typedef enum {
   OPEN,
   FIN_WAIT_1,
@@ -67,6 +75,21 @@ typedef struct {
   uint32_t fin_seq;
   int64_t fin_deadline;
   int64_t linger_deadline;
+  double cwnd;
+  double ssthresh;
+  congestion_state_t congestion_state;
+  unsigned duplicate_acks;
+  uint16_t peer_window;
+  uint16_t last_window_sent;
+  int64_t persist_deadline;
+  uint8_t* reordered_data;
+  uint8_t* reordered_present;
+  size_t reordered_base;
+  size_t reordered_count;
+  int pending_fin;
+  uint32_t pending_fin_seq;
+  FILE* trace;
+  int64_t started;
 } backend_t;
 
 static int64_t now_ms(void) {
@@ -80,6 +103,30 @@ static int retryable_network_error(int error) {
          error == ECONNREFUSED || error == EHOSTUNREACH || error == ENETUNREACH;
 }
 
+static uint16_t receive_window(backend_t* backend) {
+  pthread_mutex_lock(&backend->sock->lock);
+  /* The window is a sequence interval, including any reordered bytes already
+   * inside it. Subtracting those bytes twice would shrink its right edge and
+   * turn loss-generated duplicate ACKs into apparent window updates. */
+  size_t available = MAX_NETWORK_BUFFER - backend->sock->receive_buffer.length;
+  pthread_mutex_unlock(&backend->sock->lock);
+  return available > UINT16_MAX ? UINT16_MAX : (uint16_t)available;
+}
+
+static void trace_state(backend_t* backend, const char* event) {
+  if (!backend->trace) return;
+  const char* states[] = {"slow_start", "congestion_avoidance",
+                          "fast_recovery"};
+  window_t* window = &backend->sock->window;
+  fprintf(backend->trace, "%.3f,%s,%s,%.3f,%.3f,%u,%u,%u,%u\n",
+          (now_ms() - backend->started) / 1000.0, event,
+          states[backend->congestion_state], backend->cwnd, backend->ssthresh,
+          window->next_seq_to_send - window->last_ack_received,
+          backend->peer_window, window->last_ack_received,
+          backend->duplicate_acks);
+  fflush(backend->trace);
+}
+
 static int send_packet(backend_t* backend, uint32_t seq, uint32_t ack,
                        uint8_t flags, const uint8_t* payload, uint16_t length) {
   cmu_socket_t* sock = backend->sock;
@@ -87,7 +134,8 @@ static int send_packet(backend_t* backend, uint32_t seq, uint32_t ack,
   cmu_tcp_header_t* header = (cmu_tcp_header_t*)packet;
   uint16_t header_length = sizeof(*header);
   uint16_t packet_length = header_length + length;
-  uint16_t window = CP1_WINDOW_SIZE > UINT16_MAX ? UINT16_MAX : CP1_WINDOW_SIZE;
+  uint16_t window = receive_window(backend);
+  backend->last_window_sent = window;
   /* A non-NULL extension pointer also keeps the provided zero-length memcpy
    * in set_header well-defined when no extensions are present. */
   set_header(header, sock->my_port, ntohs(sock->conn.sin_port), seq, ack,
@@ -153,12 +201,42 @@ static void establish(backend_t* backend) {
   backend->sock->window.next_seq_to_send = backend->sock->initial_seq + 1;
 }
 
-/* ACKs are cumulative, but must never acknowledge bytes we have not sent. */
-static void acknowledge(backend_t* backend, uint32_t ack) {
-  window_t* window = &backend->sock->window;
-  if (!after(ack, window->last_ack_received) ||
+/* ACKs are cumulative. Window updates and ACKs for FIN do not grow cwnd. */
+static int acknowledge(backend_t* backend, cmu_tcp_header_t* header,
+                       uint16_t payload_length) {
+  cmu_socket_t* sock = backend->sock;
+  window_t* window = &sock->window;
+  uint32_t ack = get_ack(header);
+  if (before(ack, window->last_ack_received) ||
       after(ack, window->next_seq_to_send))
-    return;
+    return EXIT_SUCCESS;
+  uint16_t advertised = get_advertised_window(header);
+  int window_changed = advertised != backend->peer_window;
+  backend->peer_window = advertised;
+  if (advertised) backend->persist_deadline = 0;
+  if (ack == window->last_ack_received) {
+    /* A duplicate ACK has no payload, no control flag, and no window change. */
+    if (backend->head && !window_changed && advertised && !payload_length &&
+        get_flags(header) == ACK_FLAG_MASK) {
+      ++backend->duplicate_acks;
+      if (backend->congestion_state == FAST_RECOVERY) {
+        backend->cwnd += MSS;
+        trace_state(backend, "duplicate_ack");
+      } else if (backend->duplicate_acks == 3) {
+        backend->ssthresh = backend->cwnd / 2;
+        if (backend->ssthresh < 1) backend->ssthresh = 1;
+        backend->cwnd = backend->ssthresh + 3 * MSS;
+        backend->congestion_state = FAST_RECOVERY;
+        trace_state(backend, "fast_retransmit");
+        backend->data_deadline = now_ms() + DEFAULT_TIMEOUT;
+        return send_segment(backend, backend->head);
+      }
+    } else if (window_changed) {
+      backend->duplicate_acks = 0;
+      trace_state(backend, "window_update");
+    }
+    return EXIT_SUCCESS;
+  }
 
   window->last_ack_received = ack;
   if (ack == backend->fin_seq + 1) {
@@ -169,22 +247,45 @@ static void acknowledge(backend_t* backend, uint32_t ack) {
     else if (backend->close_state == LAST_ACK)
       backend->close_state = CLOSED;
   }
+  size_t acknowledged = 0;
   while (backend->head != NULL) {
     segment_t* segment = backend->head;
     if (before(ack, segment->seq + segment->length)) {
       if (after(ack, segment->seq)) {
         uint32_t consumed = ack - segment->seq;
+        acknowledged += consumed;
         segment->length -= consumed;
         memmove(segment->payload, segment->payload + consumed, segment->length);
         segment->seq = ack;
       }
       break;
     }
+    acknowledged += segment->length;
     backend->head = segment->next;
     free(segment);
   }
   if (backend->head == NULL) backend->tail = NULL;
+  if (acknowledged) {
+    pthread_mutex_lock(&sock->lock);
+    sock->send_buffered -= acknowledged;
+    pthread_cond_broadcast(&sock->wait_cond);
+    pthread_mutex_unlock(&sock->lock);
+    if (backend->congestion_state == FAST_RECOVERY) {
+      backend->cwnd = backend->ssthresh;
+      backend->congestion_state = CONGESTION_AVOIDANCE;
+    } else if (backend->congestion_state == SLOW_START) {
+      backend->cwnd += acknowledged < MSS ? acknowledged : MSS;
+      if (backend->cwnd >= backend->ssthresh)
+        backend->congestion_state = CONGESTION_AVOIDANCE;
+    } else {
+      backend->cwnd += (double)MSS * MSS / backend->cwnd;
+    }
+    if (backend->cwnd > INT32_MAX) backend->cwnd = INT32_MAX;
+    backend->duplicate_acks = 0;
+    trace_state(backend, "new_ack");
+  }
   backend->data_deadline = now_ms() + DEFAULT_TIMEOUT;
+  return EXIT_SUCCESS;
 }
 
 static int fill_window(backend_t* backend) {
@@ -192,8 +293,10 @@ static int fill_window(backend_t* backend) {
   window_t* window = &sock->window;
   for (;;) {
     uint32_t in_flight = window->next_seq_to_send - window->last_ack_received;
-    if (in_flight >= CP1_WINDOW_SIZE) return EXIT_SUCCESS;
-    size_t length = CP1_WINDOW_SIZE - in_flight;
+    uint32_t limit = (uint32_t)backend->cwnd;
+    if (limit > backend->peer_window) limit = backend->peer_window;
+    if (in_flight >= limit) return EXIT_SUCCESS;
+    size_t length = limit - in_flight;
     if (length > MSS) length = MSS;
 
     pthread_mutex_lock(&sock->lock);
@@ -263,6 +366,7 @@ static int handle_packet(backend_t* backend, uint8_t* packet, ssize_t length,
     if (flags != SYN_FLAG_MASK || payload_length != 0) return EXIT_SUCCESS;
     sock->conn = *source;
     backend->peer_initial_seq = seq;
+    backend->peer_window = get_advertised_window(header);
     sock->window.next_seq_expected = seq + 1;
     backend->state = SYN_RECEIVED;
     backend->handshake_deadline = now_ms() + DEFAULT_TIMEOUT;
@@ -277,6 +381,7 @@ static int handle_packet(backend_t* backend, uint8_t* packet, ssize_t length,
         ack != sock->initial_seq + 1)
       return EXIT_SUCCESS;
     backend->peer_initial_seq = seq;
+    backend->peer_window = get_advertised_window(header);
     sock->window.next_seq_expected = seq + 1;
     establish(backend);
     return send_final_ack(backend);
@@ -305,41 +410,84 @@ static int handle_packet(backend_t* backend, uint8_t* packet, ssize_t length,
       return send_handshake(backend);
     return EXIT_SUCCESS;
   }
-  if (flags & ACK_FLAG_MASK) acknowledge(backend, ack);
+  if ((flags & ACK_FLAG_MASK) &&
+      acknowledge(backend, header, payload_length) < 0)
+    return EXIT_ERROR;
   int fin = (flags & FIN_FLAG_MASK) != 0;
   if (payload_length == 0 && !fin) return EXIT_SUCCESS;
 
   int receive_open = backend->close_state == OPEN ||
                      backend->close_state == FIN_WAIT_1 ||
                      backend->close_state == FIN_WAIT_2;
-  if (receive_open && seq == sock->window.next_seq_expected) {
+  if (receive_open) {
     pthread_mutex_lock(&sock->lock);
-    int result = buffer_append(&sock->receive_buffer, get_payload(packet),
-                               payload_length);
-    if (result == EXIT_SUCCESS) {
-      sock->window.next_seq_expected += payload_length;
-      if (fin) {
-        /* FIN follows any payload and consumes one byte of sequence space.
-         * EOF closes only the receive stream; application writes still work. */
-        ++sock->window.next_seq_expected;
-        sock->read_eof = 1;
-        if (backend->close_state == OPEN)
-          backend->close_state = CLOSE_WAIT;
-        else if (backend->close_state == FIN_WAIT_1)
-          backend->close_state = CLOSING;
-        else
-          enter_time_wait(backend);
-      }
-      pthread_cond_broadcast(&sock->wait_cond);
+    uint32_t expected = sock->window.next_seq_expected;
+    size_t span = MAX_NETWORK_BUFFER - sock->receive_buffer.length;
+    if (fin && (uint32_t)(seq + payload_length - expected) <= span) {
+      backend->pending_fin = 1;
+      backend->pending_fin_seq = seq + payload_length;
     }
+    /* A bounded byte ring handles duplicates, overlaps, and sequence wrap.
+     * Its occupied bytes count against the same receive budget as unread data.
+     */
+    uint8_t* payload = (uint8_t*)get_payload(packet);
+    for (uint32_t i = 0; i < payload_length; ++i) {
+      uint32_t offset = seq + i - expected;
+      if (offset >= span ||
+          (backend->pending_fin && !before(seq + i, backend->pending_fin_seq)))
+        continue;
+      size_t index = (backend->reordered_base + offset) % MAX_NETWORK_BUFFER;
+      if (!backend->reordered_present[index] &&
+          sock->receive_buffer.length + backend->reordered_count <
+              MAX_NETWORK_BUFFER) {
+        backend->reordered_data[index] = payload[i];
+        backend->reordered_present[index] = 1;
+        ++backend->reordered_count;
+      }
+    }
+    while (backend->reordered_present[backend->reordered_base] &&
+           (!backend->pending_fin ||
+            sock->window.next_seq_expected != backend->pending_fin_seq)) {
+      size_t base = backend->reordered_base;
+      size_t length = 0;
+      while (
+          base + length < MAX_NETWORK_BUFFER &&
+          backend->reordered_present[base + length] &&
+          (!backend->pending_fin ||
+           sock->window.next_seq_expected + length != backend->pending_fin_seq))
+        ++length;
+      if (buffer_append(&sock->receive_buffer, backend->reordered_data + base,
+                        length) < 0) {
+        pthread_mutex_unlock(&sock->lock);
+        return EXIT_ERROR;
+      }
+      memset(backend->reordered_present + base, 0, length);
+      backend->reordered_count -= length;
+      backend->reordered_base = (base + length) % MAX_NETWORK_BUFFER;
+      sock->window.next_seq_expected += (uint32_t)length;
+    }
+    if (backend->pending_fin &&
+        backend->pending_fin_seq == sock->window.next_seq_expected) {
+      ++sock->window.next_seq_expected;
+      sock->read_eof = 1;
+      backend->pending_fin = 0;
+      /* Bytes beyond the end of the stream are never delivered. */
+      memset(backend->reordered_present, 0, MAX_NETWORK_BUFFER);
+      backend->reordered_count = 0;
+      if (backend->close_state == OPEN)
+        backend->close_state = CLOSE_WAIT;
+      else if (backend->close_state == FIN_WAIT_1)
+        backend->close_state = CLOSING;
+      else
+        enter_time_wait(backend);
+    }
+    pthread_cond_broadcast(&sock->wait_cond);
     pthread_mutex_unlock(&sock->lock);
-    if (result < 0) return EXIT_ERROR;
   }
   if (fin && backend->close_state == TIME_WAIT &&
       seq + payload_length + 1 == sock->window.next_seq_expected)
     enter_time_wait(backend);
-  /* Go-Back-N discards out-of-order and duplicate payloads, acknowledging only
-   * the contiguous prefix. Even duplicates need ACKs to recover a lost ACK. */
+  /* Acknowledge only the contiguous prefix, including for duplicate data. */
   return send_ack(backend);
 }
 
@@ -374,7 +522,28 @@ void* begin_backend(void* in) {
   backend.sock = sock;
   backend.state = sock->type == TCP_LISTENER ? LISTEN : SYN_SENT;
   int error = 0;
-  if (backend.state == SYN_SENT) {
+  backend.cwnd = WINDOW_INITIAL_WINDOW_SIZE;
+  backend.ssthresh = WINDOW_INITIAL_SSTHRESH;
+  backend.congestion_state =
+      backend.cwnd < backend.ssthresh ? SLOW_START : CONGESTION_AVOIDANCE;
+  backend.started = now_ms();
+  backend.reordered_data = malloc(MAX_NETWORK_BUFFER);
+  backend.reordered_present = calloc(MAX_NETWORK_BUFFER, 1);
+  if (!backend.reordered_data || !backend.reordered_present) error = ENOMEM;
+  const char* trace_path = getenv("CMU_TCP_TRACE");
+  if (trace_path && *trace_path) {
+    backend.trace = fopen(trace_path, "w");
+    if (!backend.trace)
+      error = errno;
+    else {
+      fputs(
+          "time_s,event,state,cwnd,ssthresh,in_flight,rwnd,ack,duplicate_"
+          "acks\n",
+          backend.trace);
+      trace_state(&backend, "initial");
+    }
+  }
+  if (!error && backend.state == SYN_SENT) {
     backend.handshake_deadline = now_ms() + DEFAULT_TIMEOUT;
     if (send_handshake(&backend) < 0) error = errno;
   }
@@ -404,16 +573,16 @@ void* begin_backend(void* in) {
       }
       timeout = wait_time(backend.handshake_deadline, now_ms());
     } else if (backend.state == ESTABLISHED) {
-      if (backend.head != NULL && now >= backend.data_deadline) {
-        /* Retransmit every outstanding segment, in order, on one oldest-byte
-         * timer. Duplicate/stale ACKs never restart this timer. */
-        for (segment_t* segment = backend.head; segment;
-             segment = segment->next) {
-          if (send_segment(&backend, segment) < 0) {
-            error = errno;
-            break;
-          }
-        }
+      if (backend.head != NULL && backend.peer_window &&
+          now >= backend.data_deadline) {
+        backend.ssthresh = backend.cwnd / 2;
+        if (backend.ssthresh < 1) backend.ssthresh = 1;
+        backend.cwnd = MSS;
+        backend.congestion_state = SLOW_START;
+        backend.duplicate_acks = 0;
+        trace_state(&backend, "timeout");
+        /* Reno restarts with one segment; the receiver retains later bytes. */
+        if (send_segment(&backend, backend.head) < 0) error = errno;
         backend.data_deadline = now_ms() + DEFAULT_TIMEOUT;
       }
       if (error != 0) break;
@@ -421,8 +590,36 @@ void* begin_backend(void* in) {
         error = errno;
         break;
       }
-      if (backend.head != NULL)
+      if (backend.head != NULL && backend.peer_window)
         timeout = wait_time(backend.data_deadline, now_ms());
+      pthread_mutex_lock(&sock->lock);
+      int pending = sock->send_buffered != 0;
+      pthread_mutex_unlock(&sock->lock);
+      if (!backend.peer_window && pending) {
+        if (!backend.persist_deadline)
+          backend.persist_deadline = now_ms() + DEFAULT_TIMEOUT;
+        if (now_ms() >= backend.persist_deadline) {
+          /* A byte before SND.UNA is already consumed (or the SYN sequence).
+           * The receiver discards it and replies with its current window. */
+          uint8_t probe = 0;
+          if (send_packet(&backend, sock->window.last_ack_received - 1,
+                          sock->window.next_seq_expected, ACK_FLAG_MASK, &probe,
+                          1) < 0) {
+            error = errno;
+            break;
+          }
+          trace_state(&backend, "window_probe");
+          backend.persist_deadline = now_ms() + DEFAULT_TIMEOUT;
+        }
+        timeout = wait_time(backend.persist_deadline, now_ms());
+      }
+      /* Reopen a zero window without waiting for another arriving packet.
+       * Other increases can ride on the next data ACK, avoiding ACK chatter. */
+      if (!backend.last_window_sent && receive_window(&backend) > 0 &&
+          send_ack(&backend) < 0) {
+        error = errno;
+        break;
+      }
 
       if (drained && backend.head == NULL &&
           (backend.close_state == OPEN || backend.close_state == CLOSE_WAIT)) {
@@ -465,6 +662,9 @@ void* begin_backend(void* in) {
       error = errno;
   }
 
+  if (backend.trace) fclose(backend.trace);
+  free(backend.reordered_data);
+  free(backend.reordered_present);
   while (backend.head != NULL) {
     segment_t* next = backend.head->next;
     free(backend.head);

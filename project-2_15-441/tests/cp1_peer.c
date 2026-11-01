@@ -7,6 +7,33 @@
 
 #include "cmu_tcp.h"
 
+typedef struct {
+  cmu_socket_t* sock;
+  const char* path;
+  int error;
+} writer_t;
+
+static void* write_input(void* opaque) {
+  writer_t* writer = opaque;
+  if (strcmp(writer->path, "-") == 0) return NULL;
+  FILE* input = fopen(writer->path, "rb");
+  if (!input) {
+    writer->error = 4;
+    return NULL;
+  }
+  unsigned char buffer[4096];
+  size_t length;
+  while ((length = fread(buffer, 1, sizeof(buffer), input)) > 0) {
+    if (cmu_write(writer->sock, buffer, (int)length) < 0) {
+      writer->error = 5;
+      break;
+    }
+  }
+  if (ferror(input)) writer->error = 6;
+  fclose(input);
+  return NULL;
+}
+
 int main(int argc, char** argv) {
   if (argc != 8) return 2;
   cmu_socket_t sock;
@@ -27,16 +54,10 @@ int main(int argc, char** argv) {
       cmu_read(&sock, buffer, -1, NO_WAIT) != -1)
     return 3;
 
-  if (strcmp(argv[3], "-") != 0) {
-    FILE* input = fopen(argv[3], "rb");
-    if (input == NULL) return 4;
-    size_t length;
-    while ((length = fread(buffer, 1, sizeof(buffer), input)) > 0) {
-      if (cmu_write(&sock, buffer, (int)length) < 0) return 5;
-    }
-    if (ferror(input)) return 6;
-    fclose(input);
-  }
+  writer_t writer = {&sock, argv[3], 0};
+  pthread_t sender;
+  if (pthread_create(&sender, NULL, write_input, &writer)) return 14;
+  if (strcmp(argv[6], "read-gate") == 0 && getchar() == EOF) return 10;
   FILE* output = fopen(argv[4], "wb");
   if (output == NULL) return 7;
   int read_to_eof = strcmp(argv[5], "eof") == 0;
@@ -54,6 +75,7 @@ int main(int argc, char** argv) {
   /* A peer FIN ends reads without preventing a response in the other direction.
    */
   if (read_to_eof && cmu_write(&sock, "reply", 5) < 0) return 13;
+  if (pthread_join(sender, NULL) || writer.error) return 15;
   puts("TRANSFER_DONE");
   fflush(stdout);
   if (strcmp(argv[6], "hold") == 0 && getchar() == EOF) return 10;

@@ -24,7 +24,7 @@
 #include "backend.h"
 
 int buffer_append(cmu_buffer_t* buffer, const void* data, size_t length) {
-  if (length > INT_MAX - buffer->length) {
+  if (length > MAX_NETWORK_BUFFER - buffer->length) {
     errno = ENOBUFS;
     return EXIT_ERROR;
   }
@@ -33,6 +33,7 @@ int buffer_append(cmu_buffer_t* buffer, const void* data, size_t length) {
     if (needed > buffer->capacity) {
       size_t capacity = buffer->capacity ? buffer->capacity : 4096;
       while (capacity < needed) capacity *= 2;
+      if (capacity > MAX_NETWORK_BUFFER) capacity = MAX_NETWORK_BUFFER;
       uint8_t* resized = realloc(buffer->data, capacity);
       if (resized == NULL) return EXIT_ERROR;
       buffer->data = resized;
@@ -216,6 +217,7 @@ int cmu_read(cmu_socket_t* sock, void* buf, int length, cmu_read_mode_t flags) {
   }
   int error = sock->error;
   pthread_mutex_unlock(&sock->lock);
+  if (count > 0) wake_backend(sock);
   if (count == 0 && error != 0) {
     errno = error;
     return EXIT_ERROR;
@@ -229,15 +231,31 @@ int cmu_write(cmu_socket_t* sock, const void* buf, int length) {
     errno = EINVAL;
     return EXIT_ERROR;
   }
+  if (length == 0) return EXIT_SUCCESS;
+  size_t written = 0;
   pthread_mutex_lock(&sock->lock);
-  if (sock->dying || sock->backend_done) {
-    int error = sock->error ? sock->error : EPIPE;
-    pthread_mutex_unlock(&sock->lock);
-    errno = error;
-    return EXIT_ERROR;
-  }
-  int result = buffer_append(&sock->send_buffer, buf, (size_t)length);
+  do {
+    while (sock->send_buffered == MAX_NETWORK_BUFFER && !sock->dying &&
+           !sock->backend_done)
+      pthread_cond_wait(&sock->wait_cond, &sock->lock);
+    if (sock->dying || sock->backend_done) {
+      int error = sock->error ? sock->error : EPIPE;
+      pthread_mutex_unlock(&sock->lock);
+      errno = error;
+      return EXIT_ERROR;
+    }
+    size_t count = (size_t)length - written;
+    size_t available = MAX_NETWORK_BUFFER - sock->send_buffered;
+    if (count > available) count = available;
+    if (count && buffer_append(&sock->send_buffer,
+                               (const uint8_t*)buf + written, count) < 0) {
+      pthread_mutex_unlock(&sock->lock);
+      return EXIT_ERROR;
+    }
+    sock->send_buffered += count;
+    written += count;
+    if (count) wake_backend(sock);
+  } while (written < (size_t)length);
   pthread_mutex_unlock(&sock->lock);
-  if (result == EXIT_SUCCESS && length > 0) wake_backend(sock);
-  return result;
+  return EXIT_SUCCESS;
 }

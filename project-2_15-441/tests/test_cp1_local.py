@@ -45,7 +45,7 @@ def packet(src, dst, seq=0, ack=0, flags=0, data=b"", **overrides):
         hlen=25,
         plen=25 + len(data),
         flags=flags,
-        window=1,
+        window=65535,
         ext=0,
     )
     values.update(overrides)
@@ -85,6 +85,7 @@ class Peer:
         receive_length=0,
         hold=True,
         initial_sequence=None,
+        read_gate=False,
     ):
         self.owner = owner
         self.directory = tempfile.TemporaryDirectory(prefix="cmu-peer-")
@@ -93,8 +94,10 @@ class Peer:
         input_path = base / "input.bin"
         input_path.write_bytes(outgoing)
         self.output = base / "output.bin"
+        self.trace = base / "trace.csv"
         self.stderr = open(base / "stderr.txt", "w+")
         environment = os.environ.copy()
+        environment["CMU_TCP_TRACE"] = str(self.trace)
         if initial_sequence is not None:
             environment["CP1_TEST_INITIAL_SEQUENCE"] = str(initial_sequence)
         else:
@@ -107,7 +110,7 @@ class Peer:
                 str(input_path),
                 str(self.output),
                 str(receive_length),
-                "hold" if hold else "auto",
+                "read-gate" if read_gate else ("hold" if hold else "auto"),
                 "check",
             ],
             stdin=subprocess.PIPE,
@@ -186,13 +189,14 @@ class Peer:
 class Relay:
     """A seeded bidirectional loss/duplication/reordering link between two peers."""
 
-    def __init__(self, destination, lossy):
+    def __init__(self, destination, lossy, drop=None):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("127.0.0.1", 0))
         self.port = self.sock.getsockname()[1]
         self.destination = ("127.0.0.1", destination)
         self.client = None
         self.lossy = lossy
+        self.drop = drop
         self.running = True
         self.random = random.Random(15441)
         self.dropped = self.duplicated = self.reordered = 0
@@ -217,6 +221,9 @@ class Relay:
                 self.client = source
                 target = self.destination
             if target is None:
+                continue
+            if self.drop and self.drop(header, source == self.destination):
+                self.dropped += 1
                 continue
             # A UDP relay/NAT forwards the payload unchanged, including embedded
             # CMU-TCP ports. Routing uses the actual UDP endpoint addresses.
@@ -260,6 +267,10 @@ class CheckpointOne(unittest.TestCase):
         text = re.sub(
             r"#define MAX_LEN .*", f"#define MAX_LEN {MAX_LEN}", text
         )
+        for name, value in getattr(cls, "grading_overrides", {}).items():
+            text = re.sub(
+                rf"#define {name} .*", f"#define {name} {value}", text
+            )
         grading.write_text(text)
         cls.binary = build / "peer"
         flags = [
