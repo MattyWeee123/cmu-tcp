@@ -302,6 +302,60 @@ class CheckpointTwo(unittest.TestCase):
         peer.finish()
 
 
+class CongestionAvoidanceFlights(unittest.TestCase):
+    """Measure complete flights with enough receive space to observe growth."""
+
+    grading_overrides = dict(
+        WINDOW_INITIAL_WINDOW_SIZE=MSS,
+        WINDOW_INITIAL_SSTHRESH=32 * MSS,
+        MAX_NETWORK_BUFFER=65535,
+    )
+    setUpClass = classmethod(CheckpointOne.setUpClass.__func__)
+    setUp = CheckpointOne.setUp
+    send = CheckpointOne.send
+    receive = CheckpointOne.receive
+    initiator_handshake = CheckpointOne.initiator_handshake
+
+    def measure_flights(self, ack_chunk=None):
+        peer = Peer(
+            self, "initiator", self.port, outgoing=b"f" * (1024 * 1024)
+        )
+        seq, expected = self.initiator_handshake(peer)
+        flight = [self.receive()]
+        sizes = []
+        for _ in range(12):
+            while select.select([self.sock], [], [], 0.01)[0]:
+                flight.append(self.receive())
+            size = sum(len(packet["data"]) for packet in flight)
+            sizes.append(size)
+            if len(sizes) > 1 and sizes[-2] >= 32 * MSS:
+                self.assertGreater(size - sizes[-2], MSS * 0.85, sizes)
+                self.assertLessEqual(size - sizes[-2], MSS + 2, sizes)
+                self.assertLess(size, 65535 - MSS, sizes)
+
+            following = []
+            for packet in flight:
+                self.assertEqual(packet["seq"], expected)
+                remaining = len(packet["data"])
+                while remaining:
+                    acknowledged = min(remaining, ack_chunk or remaining)
+                    expected = add(expected, acknowledged)
+                    remaining -= acknowledged
+                    self.send(peer, seq=seq, ack=expected, flags=ACK)
+                    # Let the sender refill after each ACK, including
+                    # fractional cwnd space. Drain the next flight only.
+                    while select.select([self.sock], [], [], 0.001)[0]:
+                        following.append(self.receive())
+            flight = following or [self.receive()]
+        self.assertGreaterEqual(sum(size >= 32 * MSS for size in sizes), 6)
+
+    def test_full_flights_grow_by_one_mss(self):
+        self.measure_flights()
+
+    def test_split_acks_do_not_accelerate_flight_growth(self):
+        self.measure_flights(ack_chunk=max(1, MSS // 8))
+
+
 # Reuse handshake, peer-isolation, data integrity, and teardown regressions.
 for name in (
     "test_initiator_retransmits_same_syn",
@@ -332,4 +386,7 @@ for name in (
     setattr(CheckpointTwo, name, getattr(CheckpointOne, name))
 
 if __name__ == "__main__":
-    unittest.main(defaultTest="CheckpointTwo", verbosity=2)
+    unittest.main(
+        defaultTest=("CheckpointTwo", "CongestionAvoidanceFlights"),
+        verbosity=2,
+    )

@@ -5,7 +5,7 @@ Current command: make test-local (or make test-cp2).
 The historical checkpoint 1 record follows below; its fixed-window and
 Go-Back-N requirements are superseded by TCP Reno in this checkpoint.
 
-The CP2 suite contains 36 tests. Packet-level tests check initial cwnd,
+The CP2 suite contains 38 tests. Packet-level tests check initial cwnd,
 slow-start growth, congestion avoidance, three duplicate ACK fast retransmit,
 fast recovery inflation/exit, timeout reduction, advertised send-window bounds,
 zero-window persist/reopening, receive-buffer bounds, duplicate suppression,
@@ -16,6 +16,17 @@ handshake, peer-isolation, transfer, and FIN regression tests are reused.
 Additional regressions check that partial ACKs retain only the unacknowledged
 suffix, invalid ACKs cannot update flow control, and reordered FIN waits for
 all preceding payload.
+
+The flight-growth fixture uses an initial window of one MSS, a threshold of
+32 MSS, and a 65,535-byte buffer in its temporary grading.h. It ACKs every
+packet while allowing the sender to refill between ACKs, then measures the
+next complete flight. A second case divides each ACK into smaller advances.
+Both require roughly one MSS of growth per flight after the threshold and
+check that the receive-window cap is not reached prematurely. Before the fix,
+the first case reproduced Gradescope test 5.4's sequence exactly through
+1,375, 2,750, 5,500, 11,000, 22,000, 44,000, 45,354, and 47,949 bytes.
+The 2,595-byte increment exposed excess credit for short segments. Congestion
+avoidance now weights each ACK by min(newly acknowledged bytes, MSS).
 
 MAX_NETWORK_BUFFER bounds unread ordered plus reordered payload, and queued
 plus unacknowledged outgoing payload. The receive advertised window is the
@@ -30,11 +41,17 @@ Validation on macOS:
   receive/send budget=3927, and ASan/UBSan.
 - Full 36-test suite, including real-peer fast retransmit, partial ACKs,
   and reordered FIN, passes with ASan/UBSan.
+- After the short-segment ACK-credit fix, all 38 tests pass with ASan/UBSan
+  (33.320 seconds); make clean all tests/cp2_transfer has no warnings.
+- The two flight-growth tests, per-ACK congestion avoidance, partial-ACK
+  retransmission, and lossy bidirectional transfer also pass with MAX_LEN=512,
+  initial window=974, threshold=3896, buffer=3927, and ASan/UBSan (17.726 s).
+  The flight-growth fixture keeps its own MSS-scaled threshold and buffer.
 - Default 3000 ms RTO checks for timeout, fast recovery, and zero-window persist.
 - 2 MiB transfer through the experiment driver, verified byte for byte.
 - Clang static analysis of backend.c and cmu_tcp.c.
 
-Validation on AWS Ubuntu 24.04 (GCC 13.3.0):
+Validation on AWS Ubuntu 24.04 (GCC 13.3.0, before the ACK-credit fix):
 - All 36 tests pass with ASan/UBSan after removing experiment traffic shaping.
 - Seventy 2 MiB transfers pass SHA-256 checks: ten at each required loss rate.
 - Both instances' C source and header hashes match the recorded source snapshot.

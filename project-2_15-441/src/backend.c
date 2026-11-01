@@ -278,7 +278,11 @@ static int acknowledge(backend_t* backend, cmu_tcp_header_t* header,
       if (backend->cwnd >= backend->ssthresh)
         backend->congestion_state = CONGESTION_AVOIDANCE;
     } else {
-      backend->cwnd += (double)MSS * MSS / backend->cwnd;
+      /* Short segments and split ACKs must not earn a full segment's credit.
+       * Otherwise filling fractional window space amplifies growth each RTT.
+       */
+      size_t credited = acknowledged < MSS ? acknowledged : MSS;
+      backend->cwnd += (double)MSS * credited / backend->cwnd;
     }
     if (backend->cwnd > INT32_MAX) backend->cwnd = INT32_MAX;
     backend->duplicate_acks = 0;
