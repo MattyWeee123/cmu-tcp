@@ -104,6 +104,31 @@ class CheckpointTwo(unittest.TestCase):
             ),
         )
 
+    def test_partial_ack_preserves_suffix_and_rejects_invalid_acks(self):
+        peer = Peer(self, "initiator", self.port, outgoing=b"p" * INITIAL)
+        seq, ack = self.initiator_handshake(peer)
+        initial = self.collect_bytes(INITIAL)
+        for invalid in (add(ack, -1), add(ack, INITIAL + 1)):
+            self.send(peer, seq=seq, ack=invalid, flags=ACK, window=0)
+        consumed = min(17, len(initial[0]["data"]) - 1)
+        self.send(peer, seq=seq, ack=add(ack, consumed), flags=ACK)
+        retry = self.receive()
+        self.assertEqual(retry["seq"], add(ack, consumed))
+        self.assertEqual(retry["data"], initial[0]["data"][consumed:])
+        self.send(peer, seq=seq, ack=add(ack, INITIAL), flags=ACK)
+        peer.finish()
+
+    def test_fin_waits_for_missing_payload(self):
+        peer = Peer(self, receive_length=3)
+        seq, ack = self.listener_handshake(peer)
+        self.send(peer, seq=add(seq, 3), ack=ack, flags=FIN | ACK)
+        self.assertEqual(self.receive()["ack"], seq)
+        self.send(peer, seq=seq, ack=ack, flags=ACK, data=b"abc")
+        self.assertEqual(self.receive()["ack"], add(seq, 4))
+        self.assertEqual(peer.line(), "TRANSFER_DONE")
+        self.assertEqual(peer.output.read_bytes(), b"abc")
+        peer.finish()
+
     def test_fast_retransmit_and_recovery(self):
         payload = b"a" * INITIAL
         peer = Peer(self, "initiator", self.port, outgoing=payload)

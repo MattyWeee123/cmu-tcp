@@ -5,7 +5,7 @@ Current command: make test-local (or make test-cp2).
 The historical checkpoint 1 record follows below; its fixed-window and
 Go-Back-N requirements are superseded by TCP Reno in this checkpoint.
 
-The CP2 suite contains 34 tests. Nine packet-level tests check initial cwnd,
+The CP2 suite contains 36 tests. Packet-level tests check initial cwnd,
 slow-start growth, congestion avoidance, three duplicate ACK fast retransmit,
 fast recovery inflation/exit, timeout reduction, advertised send-window bounds,
 zero-window persist/reopening, receive-buffer bounds, duplicate suppression,
@@ -13,6 +13,9 @@ and ordered delivery across overlap and sequence wrap. A deterministic relay
 also drops one packet between two actual endpoints and checks recovery before
 RTO, fast-recovery instrumentation, and complete file integrity. Twenty-four
 handshake, peer-isolation, transfer, and FIN regression tests are reused.
+Additional regressions check that partial ACKs retain only the unacknowledged
+suffix, invalid ACKs cannot update flow control, and reordered FIN waits for
+all preceding payload.
 
 MAX_NETWORK_BUFFER bounds unread ordered plus reordered payload, and queued
 plus unacknowledged outgoing payload. The receive advertised window is the
@@ -25,7 +28,8 @@ Validation on macOS:
 - 33-test suite with ASan/UBSan, including 1 MiB transfers each direction.
 - 33-test suite with MAX_LEN=512, initial window=974, threshold=3896,
   receive/send budget=3927, and ASan/UBSan.
-- Added deterministic real-peer fast-retransmit test passes with ASan/UBSan.
+- Full 34-test suite including real-peer fast retransmit passes with ASan/UBSan.
+- Added partial-ACK and reordered-FIN regressions pass with ASan/UBSan.
 - Default 3000 ms RTO checks for timeout, fast recovery, and zero-window persist.
 - 2 MiB transfer through the experiment driver, verified byte for byte.
 - Clang static analysis of backend.c and cmu_tcp.c.

@@ -160,6 +160,18 @@ connection startup and receiver completion acknowledgment, and excludes FIN
 and TIME_WAIT. Existing successful runs are preserved when resuming. Failed
 runs remain in the results and stop the sweep for investigation.
 
+Generate the PDF after collecting the complete sweep (requires matplotlib,
+numpy, scipy, and reportlab):
+
+```bash
+python3 utils/build_cp2_report.py experiments/results \
+  --output ../output/pdf/checkpoint2-report.pdf
+```
+
+The report includes a trace with fast retransmits and one or two timeouts,
+both unconstrained and through-origin regression fits, Pearson correlation,
+and per-loss means and sample deviations. Raw measurements accompany the PDF.
+
 ## Automatic tests
 
 You should also run automatic tests. On either the client or server container, navigate to `/vagrant/project-2_15-441/` and run:
