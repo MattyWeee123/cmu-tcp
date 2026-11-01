@@ -1,0 +1,39 @@
+{
+  "completed_trials": 70,
+  "trials_per_loss": {
+    "0.1": 10,
+    "0.2": 10,
+    "0.5": 10,
+    "1.0": 10,
+    "2.0": 10,
+    "5.0": 10,
+    "10.0": 10
+  },
+  "source_commit": "7510c3b45b00d3b470059fe8d61d9e4eafd24e8a",
+  "congestion_avoidance_ack_checks": 148623,
+  "short_ack_checks": 91684,
+  "max_cwnd_rounding_error_bytes": 0.0009947355104245048,
+  "trace_candidates": [
+    {
+      "trace": "loss-0.1-run-10.csv",
+      "fast_retransmits": 9,
+      "timeouts": 1
+    },
+    {
+      "trace": "loss-0.2-run-01.csv",
+      "fast_retransmits": 8,
+      "timeouts": 2
+    },
+    {
+      "trace": "loss-0.2-run-02.csv",
+      "fast_retransmits": 8,
+      "timeouts": 1
+    }
+  ],
+  "independent_statistics": {
+    "origin_slope_mbps": 0.12653651869847296,
+    "ols_slope_mbps": 0.1456029111383118,
+    "ols_intercept_mbps": -0.3861295196043615,
+    "pearson_r_all_trials": 0.9051790072646635
+  }
+}

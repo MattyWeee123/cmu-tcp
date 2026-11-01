@@ -51,10 +51,20 @@ Validation on macOS:
 - 2 MiB transfer through the experiment driver, verified byte for byte.
 - Clang static analysis of backend.c and cmu_tcp.c.
 
-Validation on AWS Ubuntu 24.04 (GCC 13.3.0, before the ACK-credit fix):
-- All 36 tests pass with ASan/UBSan after removing experiment traffic shaping.
-- Seventy 2 MiB transfers pass SHA-256 checks: ten at each required loss rate.
-- Both instances' C source and header hashes match the recorded source snapshot.
+Validation on AWS Ubuntu 24.04 (GCC 13.3.0, corrected source 7510c3b):
+- CP1_TEST_SANITIZE=1 make test-local: all 38 tests pass (32.341 seconds),
+  before experiment traffic shaping. Full output is in linux-validation.txt.
+- All seventy fresh 2 MiB transfers pass SHA-256 checks: ten at each required
+  loss rate. The earlier build's measurements are replaced by this full rerun.
+- Both instances' C source, header, and measurement-driver hashes match the
+  recorded source snapshot. Source and binary hashes also match after the sweep.
+- Each trial records 5 Mbps and 20 ms delay on both nodes, the required sender
+  loss percentage, and zero receiver loss in its own network JSON file.
+- An independent audit checks every throughput calculation and all 148,623
+  congestion-avoidance ACK increments, including 91,684 short ACKs. Differences
+  from MSS*min(newly acknowledged bytes, MSS)/cwnd are below 0.001 byte, matching
+  the trace's three-decimal rounding. validation.json records the audit and
+  independently recomputed regression coefficients and Pearson correlation.
 - Raw timings, traces, shaping settings, build metadata, and report calculations
   are retained under experiments/results.
 

@@ -1,0 +1,48 @@
+AWS Ubuntu 24.04 / GCC 13.3.0
+Source snapshot: 7510c3b45b00d3b470059fe8d61d9e4eafd24e8a
+Command: CP1_TEST_SANITIZE=1 make test-local
+
+python3 tests/test_cp2_local.py
+test_advertised_window_limits_and_reopens_sender (__main__.CheckpointTwo.test_advertised_window_limits_and_reopens_sender) ... ok
+test_bidirectional_lossless_transfer (__main__.CheckpointTwo.test_bidirectional_lossless_transfer) ... ok
+test_bidirectional_lossy_transfer (__main__.CheckpointTwo.test_bidirectional_lossy_transfer) ... ok
+test_changed_windows_do_not_trigger_fast_retransmit (__main__.CheckpointTwo.test_changed_windows_do_not_trigger_fast_retransmit) ... ok
+test_combined_fin_ack_with_and_without_payload (__main__.CheckpointTwo.test_combined_fin_ack_with_and_without_payload) ... ok
+test_congestion_avoidance_increases_linearly (__main__.CheckpointTwo.test_congestion_avoidance_increases_linearly) ... ok
+test_data_retransmission_piggybacks_latest_ack (__main__.CheckpointTwo.test_data_retransmission_piggybacks_latest_ack) ... ok
+test_duplicate_handshake_packets (__main__.CheckpointTwo.test_duplicate_handshake_packets) ... ok
+test_fast_retransmit_and_recovery (__main__.CheckpointTwo.test_fast_retransmit_and_recovery) ... ok
+test_fin_retransmission_and_receive_after_own_fin_ack (__main__.CheckpointTwo.test_fin_retransmission_and_receive_after_own_fin_ack) ... ok
+test_fin_waits_for_missing_payload (__main__.CheckpointTwo.test_fin_waits_for_missing_payload) ... ok
+test_handshake_and_data_through_payload_preserving_udp_relay (__main__.CheckpointTwo.test_handshake_and_data_through_payload_preserving_udp_relay) ... ok
+test_handshake_with_initial_sequence_at_uint32_max (__main__.CheckpointTwo.test_handshake_with_initial_sequence_at_uint32_max) ... ok
+test_initial_window_and_slow_start (__main__.CheckpointTwo.test_initial_window_and_slow_start) ... ok
+test_initiator_can_start_before_listener (__main__.CheckpointTwo.test_initiator_can_start_before_listener) ... ok
+test_initiator_close_waits_for_handshake (__main__.CheckpointTwo.test_initiator_close_waits_for_handshake) ... ok
+test_initiator_receives_data_with_relay_header_ports (__main__.CheckpointTwo.test_initiator_receives_data_with_relay_header_ports) ... ok
+test_initiator_rejects_bad_syn_ack (__main__.CheckpointTwo.test_initiator_rejects_bad_syn_ack) ... ok
+test_initiator_retransmits_same_syn (__main__.CheckpointTwo.test_initiator_retransmits_same_syn) ... ok
+test_listener_close_waits_for_final_handshake_ack (__main__.CheckpointTwo.test_listener_close_waits_for_final_handshake_ack) ... ok
+test_listener_duplicate_syn (__main__.CheckpointTwo.test_listener_duplicate_syn) ... ok
+test_listener_rejects_invalid_final_ack (__main__.CheckpointTwo.test_listener_rejects_invalid_final_ack) ... ok
+test_listener_rejects_malformed_packets_then_accepts_syn (__main__.CheckpointTwo.test_listener_rejects_malformed_packets_then_accepts_syn) ... ok
+test_listener_retransmits_same_syn_ack (__main__.CheckpointTwo.test_listener_retransmits_same_syn_ack) ... ok
+test_lost_final_data_ack_during_close (__main__.CheckpointTwo.test_lost_final_data_ack_during_close) ... ok
+test_no_application_data_before_handshake (__main__.CheckpointTwo.test_no_application_data_before_handshake) ... ok
+test_out_of_order_duplicates_and_overlap_are_bounded (__main__.CheckpointTwo.test_out_of_order_duplicates_and_overlap_are_bounded) ... ok
+test_partial_ack_preserves_suffix_and_rejects_invalid_acks (__main__.CheckpointTwo.test_partial_ack_preserves_suffix_and_rejects_invalid_acks) ... ok
+test_peer_fin_delivers_eof_and_allows_response (__main__.CheckpointTwo.test_peer_fin_delivers_eof_and_allows_response) ... ok
+test_random_initial_sequences (__main__.CheckpointTwo.test_random_initial_sequences) ... ok
+test_real_receiver_triggers_fast_retransmit (__main__.CheckpointTwo.test_real_receiver_triggers_fast_retransmit) ... ok
+test_receive_buffer_window_and_read_reopening (__main__.CheckpointTwo.test_receive_buffer_window_and_read_reopening) ... ok
+test_simultaneous_fin_and_sequence_wraparound (__main__.CheckpointTwo.test_simultaneous_fin_and_sequence_wraparound) ... ok
+test_timeout_returns_to_slow_start (__main__.CheckpointTwo.test_timeout_returns_to_slow_start) ... ok
+test_wrong_peer_cannot_hijack_connection (__main__.CheckpointTwo.test_wrong_peer_cannot_hijack_connection) ... ok
+test_zero_window_with_no_outstanding_data_recovers (__main__.CheckpointTwo.test_zero_window_with_no_outstanding_data_recovers) ... ok
+test_full_flights_grow_by_one_mss (__main__.CongestionAvoidanceFlights.test_full_flights_grow_by_one_mss) ... ok
+test_split_acks_do_not_accelerate_flight_growth (__main__.CongestionAvoidanceFlights.test_split_acks_do_not_accelerate_flight_growth) ... ok
+
+----------------------------------------------------------------------
+Ran 38 tests in 32.341s
+
+OK

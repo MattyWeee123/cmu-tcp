@@ -1,14 +1,14 @@
 {
-  "confirmed_utc": "2026-11-01T13:13:26.884602+00:00",
+  "confirmed_utc": "2026-11-01T17:26:15.455456+00:00",
   "terminated_instances": [
-    "i-0fd53ef6eacebf3f9",
-    "i-017dffd0d2976bfb0"
+    "i-01afc46b8fbcd6f29",
+    "i-0dee7feeeba178c30"
   ],
   "deleted_volumes": [
-    "vol-0e94cd396ba2985f6",
-    "vol-07f16fad4479067d6"
+    "vol-06558b4e5e64b44ce",
+    "vol-04762cf6d203da780"
   ],
-  "deleted_security_group": "sg-0473ca254c634416b",
-  "deleted_key_pair": "cmu-cp2-20261101",
+  "deleted_security_group": "sg-0625cf7b8347dd344",
+  "deleted_key_pair": "cmu-cp2-rerun-20261101",
   "local_key_removed": true
 }

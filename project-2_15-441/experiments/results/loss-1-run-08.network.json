@@ -1,0 +1,29 @@
+{
+  "sender": {
+    "ens5": {
+      "outgoing": {
+        "protocol=ip": {
+          "filter_id": "800::800",
+          "delay": "20ms",
+          "loss": "1%",
+          "limit": 1000,
+          "rate": "5Mbps"
+        }
+      },
+      "incoming": {}
+    }
+  },
+  "receiver": {
+    "ens5": {
+      "outgoing": {
+        "protocol=ip": {
+          "filter_id": "800::800",
+          "delay": "20ms",
+          "limit": 1000,
+          "rate": "5Mbps"
+        }
+      },
+      "incoming": {}
+    }
+  }
+}

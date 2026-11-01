@@ -1,5 +1,5 @@
 {
-  "created_utc": "2026-11-01T11:05:29.514729+00:00",
+  "created_utc": "2026-11-01T15:00:08.118346+00:00",
   "payload_bytes": 2097152,
   "payload_sha256": "d33af8e666175ae5b8def041eed658f2f801c8581f44a989bc946152fecacc9a",
   "rate_each_direction_mbps": 5,
@@ -15,10 +15,10 @@
     5,
     10
   ],
-  "receiver_private_ip": "172.31.32.254",
+  "receiver_private_ip": "172.31.39.41",
   "timing": "sender just after socket creation through application receipt; excludes FIN/TIME_WAIT",
-  "sender_uname": "Linux ip-172-31-39-125 7.0.0-1014-aws #14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:24:59 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
-  "receiver_uname": "Linux ip-172-31-32-254 7.0.0-1014-aws #14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:24:59 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+  "sender_uname": "Linux ip-172-31-44-143 7.0.0-1014-aws #14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:24:59 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+  "receiver_uname": "Linux ip-172-31-39-41 7.0.0-1014-aws #14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:24:59 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
   "grading_header": "/**\n * Copyright (C) 2022 Carnegie Mellon University\n *\n * This file is part of the TCP in the Wild course project developed for the\n * Computer Networks course (15-441/641) taught at Carnegie Mellon University.\n *\n * No part of the project may be copied and/or distributed without the express\n * permission of the 15-441/641 course staff.\n *\n *\n * This files defines constants used for grading. Do NOT modify this file as\n * any changes will be overwritten by the autograder.\n */\n\n#ifndef PROJECT_2_15_441_INC_GRADING_H_\n#define PROJECT_2_15_441_INC_GRADING_H_\n\n/*\n * DO NOT CHANGE THIS FILE\n * This contains the variables for your TCP implementation\n * and we will replace this file during the autolab testing with new variables.\n */\n\n// packet lengths\n#define MAX_LEN 1400\n\n// window variables\n#define CP1_WINDOW_SIZE (MSS * 32)\n#define WINDOW_INITIAL_WINDOW_SIZE MSS\n#define WINDOW_INITIAL_SSTHRESH (MSS * 64)\n\n// retransmission timeout\n#define DEFAULT_TIMEOUT 3000  // ms\n\n// max TCP buffer\n#define MAX_NETWORK_BUFFER 65535  // (2^16 - 1) bytes\n\n#endif  // PROJECT_2_15_441_INC_GRADING_H_\n",
   "receiver_tc": "{\n    \"ens5\": {\n        \"outgoing\": {\n            \"protocol=ip\": {\n                \"filter_id\": \"800::800\",\n                \"delay\": \"20ms\",\n                \"limit\": 1000,\n                \"rate\": \"5Mbps\"\n            }\n        },\n        \"incoming\": {}\n    }\n}\n"
 }

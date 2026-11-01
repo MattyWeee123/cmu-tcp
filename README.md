@@ -152,9 +152,11 @@ python3 utils/run_cp2_experiments.py \
   --output experiments/results
 ```
 
-The runner applies 5 Mbps and 20 ms egress delay on each node, with loss only
-on the sender. It performs ten transfers at each of 0.1%, 0.2%, 0.5%, 1%, 2%,
-5%, and 10% loss. Each run verifies SHA-256 equality, records raw timing and
+Before each trial, the runner applies 5 Mbps and 20 ms egress delay on each
+node, with loss only on the sender. It saves both nodes' resulting settings
+in a separate network JSON record for that trial. It performs ten transfers
+at each of 0.1%, 0.2%, 0.5%, 1%, 2%, 5%, and 10% loss. Each run verifies
+SHA-256 equality, records raw timing and
 congestion traces, and saves traffic-control configuration. Timing starts just
 after socket creation and ends at the receiver completion acknowledgment,
 excluding FIN and TIME_WAIT. Existing successful runs are preserved when
