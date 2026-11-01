@@ -11,6 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+from matplotlib.ticker import StrMethodFormatter
 import numpy as np
 from scipy.stats import linregress, pearsonr
 from reportlab.lib import colors
@@ -101,9 +102,7 @@ def main():
         "congestion_avoidance": "#1761a0",
         "fast_recovery": "#bc6c13",
     }
-    points = np.array(
-        [[float(r["time_s"]), float(r["cwnd"]) / 1024] for r in trace]
-    )
+    points = np.array([[float(r["time_s"]), float(r["cwnd"])] for r in trace])
     # State is constant between events, including an entire RTO wait.
     segments, segment_colors = [], []
     for index in range(1, len(points)):
@@ -126,7 +125,7 @@ def main():
     )
     ax.step(
         points[:, 0],
-        [float(r["ssthresh"]) / 1024 for r in trace],
+        [float(r["ssthresh"]) for r in trace],
         "--",
         where="post",
         color="#777777",
@@ -135,8 +134,13 @@ def main():
     )
     for state, color in state_colors.items():
         ax.plot([], [], color=color, label=state.replace("_", " ").title())
+    for label, color in (
+        ("3 duplicate ACKs", "#bc6c13"),
+        ("Timeout", "#b62936"),
+    ):
+        ax.plot([], [], marker="x", ls="none", color=color, label=label)
     for i, event in enumerate(events(trace), 1):
-        x, y = float(event["time_s"]), float(event["cwnd"]) / 1024
+        x, y = float(event["time_s"]), float(event["cwnd"])
         color = "#b62936" if event["event"] == "timeout" else "#bc6c13"
         ax.axvline(x, color=color, alpha=0.25, lw=0.8)
         ax.scatter([x], [y], color=color, marker="x", s=28, zorder=3)
@@ -152,8 +156,9 @@ def main():
     ax.set_ylim(0, max(points[:, 1]) * 1.22)
     ax.set(
         xlabel="Time since connection creation (s)",
-        ylabel="Congestion window (KiB)",
+        ylabel="Congestion window (bytes)",
     )
+    ax.yaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
     ax.legend(loc="upper right", fontsize=7, ncol=2)
     ax.grid(alpha=0.16)
     fig.tight_layout()
@@ -185,11 +190,13 @@ def main():
     ax.scatter(
         x, y, s=14, alpha=0.35, color="#1761a0", label="Individual trials (70)"
     )
+    order = np.argsort(group_x)
     ax.errorbar(
-        group_x,
-        means,
-        yerr=stds,
-        fmt="o",
+        group_x[order],
+        np.array(means)[order],
+        yerr=np.array(stds)[order],
+        fmt="o-",
+        linewidth=1,
         color="#102a43",
         capsize=3,
         label="Mean +/- sample SD (10 per rate)",
@@ -283,52 +290,9 @@ def main():
         story.append(item)
         story.append(Spacer(1, 10))
 
-    para("Checkpoint 2: TCP Reno", "Title")
-    para("15-441/641 - TCP in the Wild", "Heading2")
-    para(
-        "This report evaluates the implemented Reno sender using transfers between two separate AWS EC2 instances. All figures are generated from recorded runs; the accompanying CSV files retain timings, checksums, network settings, and congestion events."
-    )
-    para("Implementation", "Heading2")
-    para(
-        "The sender limits outstanding bytes to min(cwnd, rwnd). Slow start increases cwnd by up to one MSS per new data ACK; congestion avoidance adds MSS squared divided by cwnd. Three duplicate ACKs halve the threshold, inflate cwnd by three MSS, and retransmit the oldest missing segment. Further duplicate ACKs inflate cwnd by one MSS. The next advancing ACK exits fast recovery at the threshold. A timeout halves the threshold and resets cwnd to one MSS. This is Reno, without NewReno partial-ACK recovery or selective acknowledgments."
-    )
-    para(
-        "Send buffering includes queued and unacknowledged bytes. Ordered and reordered receive data share MAX_NETWORK_BUFFER. The receive window describes a bounded sequence interval, allowing reordered bytes to occupy existing positions without shrinking the right edge. Zero-window probes and read-triggered window reopening prevent permanent flow-control stalls. SYN/FIN reliability and independent close in each direction remain supported."
-    )
-    para("Experimental configuration", "Heading2")
-    table(
-        [
-            ["Setting", "Value"],
-            ["Placement", "Two Ubuntu 24.04 t3.micro instances, us-west-2a"],
-            ["Path", "Private IPv4, same VPC and availability zone"],
-            [
-                "Rate / delay",
-                "5 Mbps and 20 ms egress delay on each node (~40 ms RTT)",
-            ],
-            [
-                "Sender egress loss",
-                "0.1%, 0.2%, 0.5%, 1%, 2%, 5%, 10%; receiver loss 0%",
-            ],
-            [
-                "Repetitions / file",
-                f"10 at each rate; {metadata['payload_bytes']:,} bytes per transfer",
-            ],
-            [
-                "Protocol parameters",
-                "MSS 1375 B; initial cwnd 1375 B; initial ssthresh 88,000 B",
-            ],
-            [
-                "Buffer / timeout",
-                "65,535 bytes per direction; fixed RTO 3000 ms",
-            ],
-        ],
-        [1.45 * inch, 5.55 * inch],
-    )
-    para(
-        "Timing starts just after socket creation and ends when an application receipt confirms that the receiver has written all file bytes. It includes the remaining connection establishment and final receipt; FIN and TIME_WAIT are excluded. SHA-256 is compared after every transfer. The random payload and file size are identical across all trials."
-    )
-    story.append(PageBreak())
-    para("Congestion-window behavior", "Title")
+    para("1. Congestion Control Report", "Title")
+    para("15-441/641 - TCP in the Wild - Checkpoint 2")
+    para("1.1 Sender's congestion window (bytes) over time", "Heading2")
     fast_count, timeout_count = counts(trace)
     para(
         f"Selected connection: {chosen['loss_percent']}% sender loss, trial {chosen['run']}, {int(chosen['bytes']):,} bytes. Transfer time: {float(chosen['seconds']):.3f} s. The full trace contains {fast_count} triple-duplicate-ACK events and {timeout_count} timeout{'s' if timeout_count != 1 else ''}. Colors identify the sender state after each event; numbered marks identify every loss response."
@@ -356,14 +320,105 @@ def main():
             ]
         )
     table(rows, [0.5 * inch, 0.9 * inch, 2 * inch, 1.8 * inch, 1.8 * inch])
-    para(
-        "Slow start grows rapidly; congestion avoidance produces the additive-growth ramp. The tall fast-recovery peaks reflect duplicate-ACK window inflation, while actual outstanding data remains bounded by rwnd. The next advancing ACK deflates cwnd to ssthresh. A timeout restarts from one MSS when ACK feedback is insufficient for fast recovery. Multiple losses in a Reno window can therefore produce additional timeouts."
-    )
     para("Source trace: " + chosen["trace"], "Body")
     story.append(PageBreak())
-    para("Throughput and the Mathis relationship", "Title")
+    para("1. Congestion Control Report (continued)", "Title")
+    para("1.2 Does the observed CWND behavior match TCP Reno?", "Heading2")
     para(
-        "Let p be the configured independent loss probability, expressed as a fraction. For fixed MSS and RTT, the Mathis approximation predicts throughput proportional to x = 1/sqrt(p). The plot shows all 70 measured application throughputs; error bars are the sample standard deviation within each group of ten."
+        "<b>Yes: the recorded window transitions match the Reno state diagram in the writeup.</b> "
+        "In <b>slow start</b> (green), each new full-segment ACK adds one MSS (1375 bytes), giving roughly exponential growth per RTT. "
+        "In <b>congestion avoidance</b> (blue), each new ACK adds MSS squared divided by cwnd, giving approximately one MSS of additive growth per RTT."
+    )
+    first_fast_index = next(
+        i for i, row in enumerate(trace) if row["event"] == "fast_retransmit"
+    )
+    first_fast = trace[first_fast_index]
+    before_fast = trace[first_fast_index - 1]
+    para(
+        "<b>Fast retransmit and fast recovery</b> (orange) begin after three duplicate ACKs: "
+        "ssthresh becomes half the previous cwnd, the missing segment is retransmitted, and cwnd becomes ssthresh + 3*MSS. "
+        f"For example, at {float(first_fast['time_s']):.3f} s, cwnd was {float(before_fast['cwnd']):,.1f} bytes; "
+        f"ssthresh becomes {float(first_fast['ssthresh']):,.1f} bytes and cwnd becomes {float(first_fast['cwnd']):,.1f} bytes. "
+        "Each further duplicate ACK adds one MSS. The next advancing ACK exits recovery and deflates cwnd to ssthresh. "
+        "This explains the tall recovery peaks and subsequent reductions. New transmissions are also limited by the advertised receive window."
+    )
+    timeout_index = next(
+        i for i, row in enumerate(trace) if row["event"] == "timeout"
+    )
+    timeout = trace[timeout_index]
+    before_timeout = trace[timeout_index - 1]
+    para(
+        f"<b>Timeout recovery:</b> at {float(timeout['time_s']):.3f} s, cwnd falls from "
+        f"{float(before_timeout['cwnd']):,.1f} to {float(timeout['cwnd']):,.1f} bytes (one MSS), "
+        f"ssthresh becomes {float(timeout['ssthresh']):,.1f} bytes, and slow start resumes. "
+        "The flat interval before this event reflects waiting for the fixed three-second RTO. "
+        "Multiple losses within one Reno window can require a timeout after fast recovery; the trace need not form a perfectly regular sawtooth."
+    )
+    para(
+        "1.3 Experiment setup: bandwidth, loss, and transfer size", "Heading2"
+    )
+    table(
+        [
+            ["Setting", "Value"],
+            ["Placement", "Two Ubuntu 24.04 t3.micro instances, us-west-2a"],
+            [
+                "Path / shaping",
+                "Private IPv4, same VPC; tcconfig on each node's ens5",
+            ],
+            [
+                "Rate / delay",
+                "5 Mbps and 20 ms egress delay on each node (~40 ms RTT)",
+            ],
+            [
+                "CWND plot scenario",
+                f"{chosen['loss_percent']}% sender loss, trial {chosen['run']}; receiver loss 0%",
+            ],
+            [
+                "Mathis loss sweep",
+                "0.1%, 0.2%, 0.5%, 1%, 2%, 5%, 10%; sender only",
+            ],
+            [
+                "Repetitions / file",
+                f"10 at each rate; {metadata['payload_bytes']:,} bytes per transfer",
+            ],
+            [
+                "Protocol parameters",
+                "MSS 1375 B; initial cwnd 1375 B; initial ssthresh 88,000 B",
+            ],
+            [
+                "Buffer / timeout",
+                "65,535 bytes per direction; fixed RTO 3000 ms",
+            ],
+        ],
+        [1.45 * inch, 5.55 * inch],
+    )
+    durations = [float(row["seconds"]) for row in runs]
+    failed_count = len(all_runs) - len(runs)
+    failure_note = (
+        f"The raw log retains {failed_count} failed attempts, excluded from the fit."
+        if failed_count
+        else "No trials failed."
+    )
+    para(
+        "Bandwidth, delay, payload, and protocol settings remain fixed while sender loss varies. "
+        "The same deterministic random 2 MiB file is used in all 70 transfers. "
+        f"Durations range from {min(durations):.3f} to {max(durations):.3f} seconds, so every transfer lasts at least a few seconds. "
+        f"Every received file passed SHA-256 verification. {failure_note}"
+    )
+    para(
+        "Timing starts just after socket creation and ends at the application receipt confirming that the receiver wrote the entire file. "
+        "It includes any remaining connection establishment and the final receipt, but excludes FIN and TIME_WAIT. "
+        "Application throughput in Mbps is 8 * file bytes / (duration in seconds * 1,000,000); retransmissions and headers are excluded."
+    )
+    story.append(PageBreak())
+    para("2. Mathis Model Evaluation", "Title")
+    para(
+        "2.1 Throughput against 1/sqrt(p), with linear regression", "Heading2"
+    )
+    para(
+        "Following writeup Section 3.2.2, the hypothesis is T = C/sqrt(p), where p is the configured loss probability expressed as a fraction (0.1% means p = 0.001). "
+        "The figure plots all 70 measurements against x = 1/sqrt(p), connects the seven group means, and shows sample-standard-deviation error bars for ten trials per setting. "
+        "Both regression lines use all 70 measurements."
     )
     story.append(
         Image(
@@ -400,25 +455,39 @@ def main():
         ]
     )
     para(
-        f"Ordinary least squares over all trials gives T = {fit.slope:.6f} x {fit.intercept:+.6f} Mbps, with Pearson r = {fit.rvalue:.5f} and R squared = {fit.rvalue**2:.5f}. The correlation of the seven group means is {mean_r:.5f}. A fit constrained through the origin gives T = C/sqrt(p), with C = {origin_slope:.6f} Mbps. Under the dimensionless convention T = C*MSS/(RTT*sqrt(p)), using MSS = 1375 bytes and RTT = 40 ms, C = {statistics['mathis_dimensionless_C_at_40ms']:.5f}."
+        f"<b>Unconstrained OLS:</b> T = {fit.slope:.6f} x {fit.intercept:+.6f} Mbps, with R squared = {fit.rvalue**2:.5f}. "
+        f"<b>Hypothesis-constrained regression:</b> T = {origin_slope:.6f} x Mbps, with intercept fixed at zero. "
+        "The latter directly estimates C for the equation in the writeup."
     )
     story.append(PageBreak())
-    para("Interpretation and validation", "Title")
-    strength = (
-        "strong"
-        if mean_r >= 0.9
-        else "moderate" if mean_r >= 0.7 else "limited"
+    para("2. Mathis Model Evaluation (continued)", "Title")
+    para("2.2 What value did you find for C?", "Heading2")
+    para(
+        f"<b>C = {origin_slope:.6f} Mbps.</b> For the specified model T = C*x, with x = 1/sqrt(p), "
+        "least squares through the origin gives C = sum(x*T) / sum(x*x), using all 70 trials. "
+        f"Allowing an intercept instead gives a slope of {fit.slope:.6f} Mbps and intercept {fit.intercept:.6f} Mbps. "
+        "That slope describes the affine fit on page 3; the zero-intercept estimate above is C for the writeup's proportional model."
     )
     para(
-        f"The group means show {strength} positive agreement with the inverse-square-root trend (r = {mean_r:.5f}). This supports the trend to that extent, but it does not establish the Mathis approximation as an exact model of these transfers. The reported intercept and trial variability quantify departures from a pure proportional relationship."
+        "2.3 Pearson correlation between 1/sqrt(p) and throughput", "Heading2"
     )
+    para(
+        f"<b>Pearson r = {fit.rvalue:.5f}</b> across all 70 (1/sqrt(p), throughput) pairs. "
+        "It is computed as the centered cross-product divided by the product of the centered vector lengths. "
+        f"For comparison, the correlation using only the seven group means is {mean_r:.5f}; "
+        "the all-trial value is the primary result and retains the variation between repeated transfers."
+    )
+    para("2.4 Do the data corroborate Dr. Mathis's hypothesis?", "Heading2")
     verdict = (
         "The pure proportional model does not adequately describe the entire loss range."
         if normalized_ratio > 2
         else "The normalized measurements are more consistent with an approximate proportional relationship."
     )
     para(
-        f"For an exact proportional law, T*sqrt(p) would be constant. Here the seven normalized means range from {min(normalized):.5f} to {max(normalized):.5f} Mbps, a factor of {normalized_ratio:.2f}. {verdict} A high correlation alone is insufficient to establish this stronger claim."
+        f"<b>{verdict}</b> The positive correlation supports the inverse-square-root trend, "
+        "but it does not establish one constant C across these experiments. "
+        f"For exact proportionality, T*sqrt(p) would be constant. The seven normalized means range from {min(normalized):.5f} to {max(normalized):.5f} Mbps, "
+        f"a factor of {normalized_ratio:.2f}. The nonzero unconstrained intercept and trial variability also show departures from the hypothesis."
     )
     para(
         "At low loss, the 5 Mbps rate limit, queueing delay, receive window, and finite slow-start period can cap or reduce throughput. At higher loss, multiple missing packets and the fixed three-second retransmission timeout make Reno spend time waiting rather than following the steady-state sawtooth assumed by the approximation. These effects can lower throughput relative to a model based only on p and a nominal 40 ms RTT. The configured RTT is a baseline; serialization and queueing increase actual RTT during a transfer."
@@ -426,27 +495,17 @@ def main():
     para(
         f"For the ten 10% loss trials, the number of recorded timeouts multiplied by the fixed 3 s RTO accounts for approximately {timeout_wait_share:.1%} of total transfer time. This estimates the contribution of timeout intervals; it is not a direct measurement of link idleness."
     )
-    durations = [float(r["seconds"]) for r in runs]
-    failed_count = len(all_runs) - len(runs)
-    failure_note = (
-        f"The raw run log retains {failed_count} failed attempts, excluded from the successful-trial fit."
-        if failed_count
-        else "No trials failed."
-    )
+    para("Validation and reproducibility", "Heading2")
     para(
-        f"Transfer durations range from {min(durations):.3f} to {max(durations):.3f} seconds. All 70 files passed the SHA-256 check. {failure_note} No missing data is interpolated. The experiment uses application goodput, so transport headers, retransmissions, and connection overhead do not count as delivered bytes."
-    )
-    para("Code validation", "Heading2")
-    para(
-        "All 36 portable tests passed on macOS and AWS Ubuntu 24.04 with AddressSanitizer and UndefinedBehaviorSanitizer. An independent UDP peer checks exact packet behavior, and actual endpoints verify integrity and loss recovery. Coverage includes initial window size, slow start, congestion avoidance, three duplicate ACKs, fast recovery, timeout reduction, flow-control limits, zero-window recovery, overlap/reordering, sequence wrap, handshake, peer isolation, and FIN teardown. Additional sanitizer checks cover changed packet/buffer parameters and 1 MiB bidirectional transfers. A deterministic drop verifies recovery before RTO. The experiment driver separately passed a 2 MiB byte-for-byte loopback transfer. Commands and validation results are in tests.txt."
-    )
-    para("Reproducibility", "Heading2")
-    para(
-        "run_cp2_experiments.py records network settings, protocol constants, payload checksums, throughput, and raw congestion traces. build_cp2_report.py validates ten successful trials per loss rate, computes both regression forms, and renders this report. The data and calculations accompany the report in experiments/results. source.json and remote-builds.json verify matching C source and header hashes on both AWS nodes. The temporary instances are terminated after collecting the results; cleanup.json records removal of their volumes, security group, and keys."
+        "All 36 portable tests passed on macOS and AWS Ubuntu 24.04 with AddressSanitizer and UndefinedBehaviorSanitizer; commands and coverage are in tests.txt. "
+        "The accompanying experiments/results directory contains all 70 timings, hashes, raw CWND traces, traffic-control settings, and regression results. "
+        "source.json and remote-builds.json record matching protocol sources on both nodes. build_cp2_report.py reproduces the figures and calculations. "
+        "cleanup.json records removal of the temporary AWS resources."
     )
     para("References", "Heading2")
     para(
-        "Course Project 2 handout, checkpoint 2 requirements and Reno state diagram.<br/>RFC 5681, TCP Congestion Control, sections 3.1-3.2: https://www.rfc-editor.org/rfc/rfc5681<br/>RFC 9293, Transmission Control Protocol, section 3.8.6: https://www.rfc-editor.org/rfc/rfc9293"
+        "Course Project 2 writeup (October 6, 2026), Section 3.2, Figure 2, and report requirements on pages 7-8.<br/>"
+        "RFC 5681, TCP Congestion Control, Sections 3.1-3.2: https://www.rfc-editor.org/rfc/rfc5681"
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
